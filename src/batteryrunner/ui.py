@@ -23,6 +23,7 @@ g = {
     "event_queue": None,
     "worker_stop": None,
     "worker_thread": None,
+    "worker_gate": None,
     "clock_label": None,
 }
 
@@ -84,6 +85,7 @@ def launch_ui() -> None:
     g["command_queue"] = queue.Queue()
     g["event_queue"] = queue.Queue()
     g["worker_stop"] = threading.Event()
+    g["worker_gate"] = threading.RLock()
 
     _build_window(root)
     _refresh_rows(force=True)
@@ -117,13 +119,7 @@ def _build_window(root) -> None:
 
     buttons = ttk.Frame(header)
     buttons.grid(row=0, column=2, sticky="e")
-    ttk.Button(buttons, text="Scan Drop", command=_scan_drop_and_refresh).pack(
-        side="left", padx=(8, 0)
-    )
     ttk.Button(buttons, text="Create Bproc", command=_open_create_bproc_dialog).pack(
-        side="left", padx=(8, 0)
-    )
-    ttk.Button(buttons, text="Tick Due", command=_tick_due_and_refresh).pack(
         side="left", padx=(8, 0)
     )
 
@@ -343,6 +339,7 @@ def _create_row_widgets(record: dict) -> None:
         ("Run", lambda sid=short_id: _run_now(sid)),
         ("Logs", lambda sid=short_id: _open_log_window(sid)),
         ("Errors", lambda sid=short_id: _open_error_window(sid)),
+        ("Delete", lambda sid=short_id: _open_delete_dialog(sid)),
     ]:
         button = ttk.Button(actions, text=text, command=fn)
         button.pack(side="left", padx=(0, 2))
@@ -404,7 +401,7 @@ def _toggle_enabled(short_id: str, var) -> None:
     """
     Toggle enabled status.
     """
-    storage.set_enabled(short_id, bool(var.get()))
+    _run_with_worker_paused(storage.set_enabled, short_id, bool(var.get()))
     _refresh_rows()
 
 
@@ -412,7 +409,7 @@ def _toggle_lock(short_id: str, var) -> None:
     """
     Toggle lock-on-error behavior.
     """
-    storage.set_lock_on_error(short_id, bool(var.get()))
+    _run_with_worker_paused(storage.set_lock_on_error, short_id, bool(var.get()))
     _refresh_rows()
 
 
@@ -421,7 +418,7 @@ def _change_schedule(short_id: str, label: str) -> None:
     Change schedule from the dropdown.
     """
     mapping = dict(util.SCHEDULE_CHOICES)
-    storage.set_schedule_seconds(short_id, mapping[label])
+    _run_with_worker_paused(storage.set_schedule_seconds, short_id, mapping[label])
     _refresh_rows()
 
 
@@ -529,10 +526,65 @@ def _clear_log_and_refresh(short_id: str, path, text_widget) -> None:
     """
     Clear the per-bproc log file and refresh both views.
     """
-    record = storage.load_bproc_record(short_id)
-    storage.clear_bproc_log(record["folder_path"])
+    record = _run_with_worker_paused(storage.load_bproc_record, short_id)
+    _run_with_worker_paused(storage.clear_bproc_log, record["folder_path"])
     _reload_log_text(path, text_widget)
     _refresh_rows()
+
+
+def _open_delete_dialog(short_id: str) -> None:
+    """
+    Prompt for bproc deletion behavior.
+    """
+    record = storage.load_bproc_record(short_id)
+    top = tk.Toplevel(g["root"])
+    top.title("Delete Bproc")
+    top.geometry("420x150")
+    top.resizable(False, False)
+    top.grid_columnconfigure(0, weight=1)
+
+    frame = ttk.Frame(top, padding=12)
+    frame.grid(row=0, column=0, sticky="nsew")
+    frame.grid_columnconfigure(0, weight=1)
+
+    ttk.Label(
+        frame,
+        text=f"Delete Request: {record['name']} [{short_id}]",
+    ).grid(row=0, column=0, sticky="w", pady=(0, 10))
+
+    delete_folder_var = tk.BooleanVar(value=False)
+    ttk.Checkbutton(
+        frame,
+        text="Delete bproc folder as well",
+        variable=delete_folder_var,
+    ).grid(row=1, column=0, sticky="w", pady=(0, 12))
+
+    buttons = ttk.Frame(frame)
+    buttons.grid(row=2, column=0, sticky="e")
+    ttk.Button(
+        buttons,
+        text="Confirm",
+        command=lambda sid=short_id, var=delete_folder_var, win=top: _confirm_delete_bproc(
+            sid,
+            bool(var.get()),
+            win,
+        ),
+    ).pack(side="left", padx=(0, 6))
+    ttk.Button(buttons, text="Cancel", command=top.destroy).pack(side="left")
+
+
+def _confirm_delete_bproc(short_id: str, delete_folder: bool, window) -> None:
+    """
+    Delete a bproc per the chosen confirmation options.
+    """
+    try:
+        _run_with_worker_paused(storage.delete_bproc, short_id, delete_folder)
+    except Exception as exc:
+        messagebox.showerror("Delete Bproc", str(exc), parent=window)
+        return
+
+    window.destroy()
+    _refresh_rows(force=True)
 
 
 def _bproc_has_logs(record: dict) -> bool:
@@ -547,14 +599,14 @@ def _clear_error_and_close(short_id: str, window) -> None:
     """
     Clear the stored last error.
     """
-    record = storage.load_bproc_record(short_id)
+    record = _run_with_worker_paused(storage.load_bproc_record, short_id)
     state = record["state"]
     state["runtime"]["last_error"] = {
         "timestamp": None,
         "message": None,
         "traceback": None,
     }
-    storage.save_state(record["folder_path"], state)
+    _run_with_worker_paused(storage.save_state, record["folder_path"], state)
     window.destroy()
     _refresh_rows()
 
@@ -699,7 +751,7 @@ def _create_bproc_from_dialog(window, name_var, schedule_var, lock_var) -> None:
         return
 
     try:
-        storage.create_bproc(name, seconds, bool(lock_var.get()))
+        _run_with_worker_paused(storage.create_bproc, name, seconds, bool(lock_var.get()))
     except Exception as exc:
         messagebox.showerror("Create Bproc", str(exc), parent=window)
         return
@@ -713,7 +765,7 @@ def _save_code_and_refresh(short_id: str, value: str) -> None:
     Save code.py after basic validation.
     """
     compile(value, f"{short_id}/code.py", "exec")
-    storage.save_bproc_code_text(short_id, value)
+    _run_with_worker_paused(storage.save_bproc_code_text, short_id, value)
 
 
 def _save_config_and_refresh(short_id: str, value: str) -> None:
@@ -723,7 +775,7 @@ def _save_config_and_refresh(short_id: str, value: str) -> None:
     data = json.loads(value)
     if not isinstance(data, dict):
         raise ValueError("Config must be a JSON object")
-    storage.save_bproc_config_object(short_id, data)
+    _run_with_worker_paused(storage.save_bproc_config_object, short_id, data)
 
 
 def _copy_to_clipboard(value: str) -> None:
@@ -878,21 +930,22 @@ def _handle_worker_command(command: str, payload) -> bool:
     """
     Execute one worker command and report whether the UI should refresh.
     """
-    if command == "scan":
-        storage.process_drop()
-        return True
+    with g["worker_gate"]:
+        if command == "scan":
+            storage.process_drop()
+            return True
 
-    if command == "tick_due":
-        runner.run_scheduler_pass()
-        return True
+        if command == "tick_due":
+            runner.run_scheduler_pass()
+            return True
 
-    if command == "run_now":
-        runner.run_bproc_now(payload)
-        return True
+        if command == "run_now":
+            runner.run_bproc_now(payload)
+            return True
 
-    if command == "scheduler":
-        runner.run_scheduler_pass()
-        return True
+        if command == "scheduler":
+            runner.run_scheduler_pass()
+            return True
 
     raise ValueError(f"Unknown worker command: {command}")
 
@@ -903,3 +956,11 @@ def _on_close() -> None:
     """
     g["worker_stop"].set()
     g["root"].destroy()
+
+
+def _run_with_worker_paused(fn, *args, **kwargs):
+    """
+    Run a UI-side storage mutation while excluding worker activity.
+    """
+    with g["worker_gate"]:
+        return fn(*args, **kwargs)

@@ -247,6 +247,23 @@ def create_bproc(name: str, seconds: int = 3600, lock_on_error: bool = True) -> 
     }
 
 
+def delete_bproc(short_id: str, delete_folder: bool = False) -> None:
+    """
+    Remove a bproc from inventory, optionally deleting its folder too.
+    """
+    inventory = load_inventory()
+    item = inventory["brprocs"].get(short_id)
+    if item is None:
+        raise KeyError(f"Unknown bproc short id: {short_id}")
+
+    folder = get_brprocs_root() / item["folder"]
+    del inventory["brprocs"][short_id]
+    save_inventory(inventory)
+
+    if delete_folder and folder.exists():
+        shutil.rmtree(folder)
+
+
 def set_enabled(short_id: str, enabled: bool) -> dict:
     """
     Update enabled status and persist.
