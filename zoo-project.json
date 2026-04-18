@@ -1,0 +1,13 @@
+{
+  "zookeep-project-guid": "cc65c452-2994-4913-a02d-33947b9eb23b",
+  "name": "battery-runner",
+  "repo-type": "python-2026-03",
+  "license": "CC0-1.0",
+  "repository": {
+    "name": "battery-runner",
+    "visibility": "public"
+  },
+  "python-package": {
+    "name": "batteryrunner"
+  }
+}
