@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import json
 import os
+import queue
+import threading
 import tkinter as tk
+import time
 from tkinter import messagebox, ttk
 
 from batteryrunner import runner, storage, util
@@ -15,7 +18,12 @@ from batteryrunner import runner, storage, util
 g = {
     "root": None,
     "rows": {},
-    "last_snapshot": None,
+    "last_snapshot": {"order": [], "rows": {}},
+    "command_queue": None,
+    "event_queue": None,
+    "worker_stop": None,
+    "worker_thread": None,
+    "clock_label": None,
 }
 
 
@@ -42,11 +50,17 @@ def launch_ui() -> None:
     root.title("Battery Runner")
     root.geometry("1180x720")
     g["root"] = root
+    g["command_queue"] = queue.Queue()
+    g["event_queue"] = queue.Queue()
+    g["worker_stop"] = threading.Event()
 
     _build_window(root)
-    _refresh_rows()
+    _refresh_rows(force=True)
+    _start_worker()
+    _update_clock()
+    root.protocol("WM_DELETE_WINDOW", _on_close)
     _schedule_refresh()
-    _schedule_scheduler()
+    _schedule_event_poll()
     root.mainloop()
 
 
@@ -60,15 +74,23 @@ def _build_window(root) -> None:
     header = ttk.Frame(root, padding=10)
     header.grid(row=0, column=0, sticky="ew")
     header.grid_columnconfigure(0, weight=1)
+    header.grid_columnconfigure(1, weight=1)
+    header.grid_columnconfigure(2, weight=1)
 
     ttk.Label(header, text="Battery Runner", font=("Segoe UI", 18, "bold")).grid(
         row=0, column=0, sticky="w"
     )
-    ttk.Button(header, text="Scan Drop", command=_scan_drop_and_refresh).grid(
-        row=0, column=1, padx=(8, 0)
+    clock_label = ttk.Label(header, text="", font=("Consolas", 12))
+    clock_label.grid(row=0, column=1, sticky="n")
+    g["clock_label"] = clock_label
+
+    buttons = ttk.Frame(header)
+    buttons.grid(row=0, column=2, sticky="e")
+    ttk.Button(buttons, text="Scan Drop", command=_scan_drop_and_refresh).pack(
+        side="left", padx=(8, 0)
     )
-    ttk.Button(header, text="Tick Due", command=_tick_due_and_refresh).grid(
-        row=0, column=2, padx=(8, 0)
+    ttk.Button(buttons, text="Tick Due", command=_tick_due_and_refresh).pack(
+        side="left", padx=(8, 0)
     )
 
     columns = ttk.Frame(root, padding=(10, 0, 10, 10))
@@ -102,6 +124,19 @@ def _build_window(root) -> None:
     _build_header_row(body)
 
 
+def _update_clock() -> None:
+    """
+    Update the header clock once per second.
+    """
+    label = g["clock_label"]
+    if label is None:
+        return
+
+    label.configure(text=time.strftime("%Y-%m-%d %H:%M:%S"))
+    if not g["worker_stop"].is_set():
+        g["root"].after(1000, _update_clock)
+
+
 def _configure_grid_columns(frame) -> None:
     """
     Apply the shared column geometry used by headers and row data.
@@ -123,75 +158,132 @@ def _build_header_row(parent) -> None:
 
 def _refresh_rows(force: bool = False) -> bool:
     """
-    Rebuild the list of bprocs when the visible data changed.
+    Update the list of bprocs when the visible data changed.
     """
     records = storage.list_bproc_entries()
-    snapshot = _build_display_snapshot(records)
-    if not force and snapshot == g["last_snapshot"]:
+    plan = _build_display_plan(records)
+    if not force and plan == g["last_snapshot"]:
         return False
 
-    body = g["body"]
-    for child in body.winfo_children():
-        child.destroy()
-
-    g["rows"].clear()
-    g["last_snapshot"] = snapshot
-    _build_header_row(body)
-
-    for row_index, record in enumerate(records, start=1):
-        _build_row(body, row_index, record)
+    _remove_deleted_rows(plan)
+    _create_missing_rows(plan, records)
+    _update_existing_rows(plan)
+    _regrid_rows(plan)
+    g["last_snapshot"] = plan
 
     return True
 
 
-def _build_display_snapshot(records: list[dict]) -> list[dict]:
+def _build_display_plan(records: list[dict]) -> dict:
     """
     Capture the row data that is currently visible in the grid.
     """
-    snapshot = []
+    plan = {
+        "order": [],
+        "rows": {},
+    }
 
     for record in records:
         state = record["state"]
         runtime = state["runtime"]
-        snapshot.append(
-            {
-                "short_id": record["short_id"],
-                "name": record["name"],
-                "enabled": state["enabled"],
-                "lock_on_error": state["lock_on_error"],
-                "schedule_label": state["schedule"]["label"],
-                "last_run": runtime["last_run"],
-                "next_run": runtime["next_run"],
-                "last_error_message": runtime["last_error"]["message"],
-            }
-        )
+        short_id = record["short_id"]
+        plan["order"].append(short_id)
+        plan["rows"][short_id] = {
+            "short_id": short_id,
+            "name": record["name"],
+            "enabled": state["enabled"],
+            "lock_on_error": state["lock_on_error"],
+            "schedule_label": state["schedule"]["label"],
+            "last_run": runtime["last_run"],
+            "next_run": runtime["next_run"],
+            "last_error_message": runtime["last_error"]["message"] or "-",
+        }
 
-    return snapshot
+    return plan
 
 
-def _build_row(parent, row_index: int, record: dict) -> None:
+def _remove_deleted_rows(plan: dict) -> None:
+    """
+    Remove any rows that no longer exist.
+    """
+    keep_ids = set(plan["rows"])
+    for short_id in list(g["rows"]):
+        if short_id in keep_ids:
+            continue
+
+        row = g["rows"].pop(short_id)
+        for widget in row["widgets"]:
+            widget.destroy()
+
+
+def _create_missing_rows(plan: dict, records: list[dict]) -> None:
+    """
+    Create row widgets for any newly visible bprocs.
+    """
+    records_by_id = {record["short_id"]: record for record in records}
+
+    for short_id in plan["order"]:
+        if short_id in g["rows"]:
+            continue
+
+        _create_row_widgets(records_by_id[short_id])
+
+
+def _update_existing_rows(plan: dict) -> None:
+    """
+    Update row widgets whose visible values changed.
+    """
+    old_rows = g["last_snapshot"]["rows"]
+
+    for short_id in plan["order"]:
+        row_plan = plan["rows"][short_id]
+        if old_rows.get(short_id) == row_plan:
+            continue
+
+        _apply_row_plan(short_id, row_plan)
+
+
+def _regrid_rows(plan: dict) -> None:
+    """
+    Place each row at the correct grid position.
+    """
+    for row_index, short_id in enumerate(plan["order"], start=1):
+        row = g["rows"][short_id]
+        row["enabled_widget"].grid_configure(row=row_index)
+        row["lock_widget"].grid_configure(row=row_index)
+        row["schedule_widget"].grid_configure(row=row_index)
+        row["name_widget"].grid_configure(row=row_index)
+        row["actions_widget"].grid_configure(row=row_index)
+        row["last_run_widget"].grid_configure(row=row_index)
+        row["next_run_widget"].grid_configure(row=row_index)
+        row["error_widget"].grid_configure(row=row_index)
+
+
+def _create_row_widgets(record: dict) -> None:
     """
     Create one row in the bproc grid.
     """
+    parent = g["body"]
     state = record["state"]
-    runtime = state["runtime"]
     short_id = record["short_id"]
 
     enabled_var = tk.BooleanVar(value=state["enabled"])
     lock_var = tk.BooleanVar(value=state["lock_on_error"])
     schedule_var = tk.StringVar(value=state["schedule"]["label"])
 
-    ttk.Checkbutton(
+    enabled_widget = ttk.Checkbutton(
         parent,
         variable=enabled_var,
         command=lambda sid=short_id, var=enabled_var: _toggle_enabled(sid, var),
-    ).grid(row=row_index, column=0, sticky="w", padx=1, pady=3)
+    )
+    enabled_widget.grid(column=0, sticky="w", padx=1, pady=3)
 
-    ttk.Checkbutton(
+    lock_widget = ttk.Checkbutton(
         parent,
         variable=lock_var,
         command=lambda sid=short_id, var=lock_var: _toggle_lock(sid, var),
-    ).grid(row=row_index, column=1, sticky="w", padx=1, pady=3)
+    )
+    lock_widget.grid(column=1, sticky="w", padx=1, pady=3)
 
     schedule_menu = ttk.OptionMenu(
         parent,
@@ -201,14 +293,13 @@ def _build_row(parent, row_index: int, record: dict) -> None:
         command=lambda label, sid=short_id: _change_schedule(sid, label),
     )
     schedule_menu.configure(width=8)
-    schedule_menu.grid(row=row_index, column=2, sticky="w", padx=1, pady=3)
+    schedule_menu.grid(column=2, sticky="w", padx=1, pady=3)
 
-    ttk.Label(parent, text=f"{record['name']}  [{short_id}]").grid(
-        row=row_index, column=3, sticky="w", padx=3, pady=3
-    )
+    name_widget = ttk.Label(parent)
+    name_widget.grid(column=3, sticky="w", padx=3, pady=3)
 
     actions = ttk.Frame(parent)
-    actions.grid(row=row_index, column=4, sticky="w", padx=3, pady=3)
+    actions.grid(column=4, sticky="w", padx=3, pady=3)
     for text, fn in [
         ("Folder", lambda sid=short_id: _open_folder(sid)),
         ("Edit", lambda sid=short_id: _open_code_editor(sid)),
@@ -218,23 +309,51 @@ def _build_row(parent, row_index: int, record: dict) -> None:
     ]:
         ttk.Button(actions, text=text, command=fn).pack(side="left", padx=(0, 2))
 
-    ttk.Label(parent, text=util.format_timestamp(runtime["last_run"])).grid(
-        row=row_index, column=5, sticky="w", padx=3, pady=3
-    )
-    ttk.Label(parent, text=util.format_timestamp(runtime["next_run"])).grid(
-        row=row_index, column=6, sticky="w", padx=3, pady=3
-    )
-
-    last_error = runtime["last_error"]["message"] or "-"
-    ttk.Label(parent, text=last_error).grid(
-        row=row_index, column=7, sticky="w", padx=3, pady=3
-    )
+    last_run_widget = ttk.Label(parent)
+    last_run_widget.grid(column=5, sticky="w", padx=3, pady=3)
+    next_run_widget = ttk.Label(parent)
+    next_run_widget.grid(column=6, sticky="w", padx=3, pady=3)
+    error_widget = ttk.Label(parent)
+    error_widget.grid(column=7, sticky="w", padx=3, pady=3)
 
     g["rows"][short_id] = {
         "enabled_var": enabled_var,
         "lock_var": lock_var,
         "schedule_var": schedule_var,
+        "enabled_widget": enabled_widget,
+        "lock_widget": lock_widget,
+        "schedule_widget": schedule_menu,
+        "name_widget": name_widget,
+        "actions_widget": actions,
+        "last_run_widget": last_run_widget,
+        "next_run_widget": next_run_widget,
+        "error_widget": error_widget,
+        "widgets": [
+            enabled_widget,
+            lock_widget,
+            schedule_menu,
+            name_widget,
+            actions,
+            last_run_widget,
+            next_run_widget,
+            error_widget,
+        ],
     }
+    _apply_row_plan(short_id, _build_display_plan([record])["rows"][short_id])
+
+
+def _apply_row_plan(short_id: str, row_plan: dict) -> None:
+    """
+    Apply visible row data to existing widgets.
+    """
+    row = g["rows"][short_id]
+    row["enabled_var"].set(row_plan["enabled"])
+    row["lock_var"].set(row_plan["lock_on_error"])
+    row["schedule_var"].set(row_plan["schedule_label"])
+    row["name_widget"].configure(text=f"{row_plan['name']}  [{short_id}]")
+    row["last_run_widget"].configure(text=util.format_timestamp(row_plan["last_run"]))
+    row["next_run_widget"].configure(text=util.format_timestamp(row_plan["next_run"]))
+    row["error_widget"].configure(text=row_plan["last_error_message"])
 
 
 def _toggle_enabled(short_id: str, var) -> None:
@@ -274,8 +393,7 @@ def _run_now(short_id: str) -> None:
     """
     Run one bproc now.
     """
-    runner.run_bproc_now(short_id)
-    _refresh_rows()
+    _enqueue_worker_command("run_now", short_id)
 
 
 def _open_error_window(short_id: str) -> None:
@@ -428,16 +546,14 @@ def _scan_drop_and_refresh() -> None:
     """
     Install dropped items and redraw the UI.
     """
-    storage.process_drop()
-    _refresh_rows()
+    _enqueue_worker_command("scan")
 
 
 def _tick_due_and_refresh() -> None:
     """
     Run one scheduler pass and redraw.
     """
-    runner.run_scheduler_pass()
-    _refresh_rows()
+    _enqueue_worker_command("tick_due")
 
 
 def _schedule_refresh() -> None:
@@ -455,16 +571,112 @@ def _refresh_loop() -> None:
     _schedule_refresh()
 
 
-def _schedule_scheduler() -> None:
+def _schedule_event_poll() -> None:
     """
-    Periodically run due bprocs.
+    Poll the worker event queue.
     """
-    g["root"].after(500, _scheduler_loop)
+    g["root"].after(200, _process_worker_events)
 
 
-def _scheduler_loop() -> None:
+def _process_worker_events() -> None:
     """
-    Run the scheduler and reschedule.
+    Drain worker events and reschedule.
     """
-    runner.run_scheduler_pass()
-    _schedule_scheduler()
+    while True:
+        try:
+            event_type, payload = g["event_queue"].get_nowait()
+        except queue.Empty:
+            break
+
+        if event_type == "refresh":
+            _refresh_rows(force=bool(payload))
+        elif event_type == "error":
+            messagebox.showerror("Battery Runner Worker Error", str(payload), parent=g["root"])
+
+    if not g["worker_stop"].is_set():
+        _schedule_event_poll()
+
+
+def _enqueue_worker_command(command: str, payload=None) -> None:
+    """
+    Queue work for the background worker.
+    """
+    g["command_queue"].put((command, payload))
+
+
+def _start_worker() -> None:
+    """
+    Start the scheduler worker thread.
+    """
+    worker = threading.Thread(
+        target=_worker_main,
+        name="battery-runner-worker",
+        daemon=True,
+    )
+    g["worker_thread"] = worker
+    worker.start()
+
+
+def _worker_main() -> None:
+    """
+    Run scheduler and explicit commands off the Tk thread.
+    """
+    next_scheduler_at = time.monotonic() + 1.0
+
+    while not g["worker_stop"].is_set():
+        timeout = max(0.0, next_scheduler_at - time.monotonic())
+        try:
+            command, payload = g["command_queue"].get(timeout=timeout)
+        except queue.Empty:
+            command = "scheduler"
+            payload = None
+
+        try:
+            force_refresh = _handle_worker_command(command, payload)
+        except Exception as exc:
+            g["event_queue"].put(("error", exc))
+            force_refresh = False
+
+        if force_refresh:
+            g["event_queue"].put(("refresh", False))
+
+        if command != "scheduler" and time.monotonic() >= next_scheduler_at:
+            try:
+                if _handle_worker_command("scheduler", None):
+                    g["event_queue"].put(("refresh", False))
+            except Exception as exc:
+                g["event_queue"].put(("error", exc))
+
+        if command == "scheduler" or time.monotonic() >= next_scheduler_at:
+            next_scheduler_at = time.monotonic() + 1.0
+
+
+def _handle_worker_command(command: str, payload) -> bool:
+    """
+    Execute one worker command and report whether the UI should refresh.
+    """
+    if command == "scan":
+        storage.process_drop()
+        return True
+
+    if command == "tick_due":
+        runner.run_scheduler_pass()
+        return True
+
+    if command == "run_now":
+        runner.run_bproc_now(payload)
+        return True
+
+    if command == "scheduler":
+        runner.run_scheduler_pass()
+        return True
+
+    raise ValueError(f"Unknown worker command: {command}")
+
+
+def _on_close() -> None:
+    """
+    Stop the worker thread and close the window.
+    """
+    g["worker_stop"].set()
+    g["root"].destroy()
