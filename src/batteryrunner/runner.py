@@ -7,7 +7,6 @@ from __future__ import annotations
 import importlib.util
 import sys
 import traceback
-from datetime import timedelta
 
 from batteryrunner import storage, util
 
@@ -45,11 +44,11 @@ def should_run_record(record: dict) -> bool:
     if runtime["running"]:
         return False
 
-    next_run = util.parse_iso(runtime["next_run"])
+    next_run = util.parse_timestamp(runtime["next_run"])
     if next_run is None:
         return True
 
-    return util.parse_iso(util.now_iso()) >= next_run
+    return util.now_epoch() >= next_run
 
 
 def run_bproc_now(short_id: str) -> dict:
@@ -59,7 +58,7 @@ def run_bproc_now(short_id: str) -> dict:
     record = storage.load_bproc_record(short_id)
     state = record["state"]
     runtime = state["runtime"]
-    now = util.now_iso()
+    now = util.now_epoch()
 
     runtime["running"] = True
     runtime["last_run"] = now
@@ -70,7 +69,7 @@ def run_bproc_now(short_id: str) -> dict:
         if not hasattr(module, "tick"):
             raise AttributeError("code.py must define tick(context)")
 
-        context = build_context(record)
+        context = build_context(record, now)
         module.tick(context)
         runtime["last_success"] = now
         runtime["last_error"] = {
@@ -89,14 +88,17 @@ def run_bproc_now(short_id: str) -> dict:
             state["enabled"] = False
     finally:
         runtime["running"] = False
-        runtime["next_run"] = _compute_next_run(state["schedule"]["seconds"])
+        runtime["next_run"] = _compute_next_run(
+            state["schedule"]["seconds"],
+            runtime["last_run"],
+        )
         storage.save_state(record["folder_path"], state)
 
     record["state"] = state
     return record
 
 
-def build_context(record: dict) -> dict:
+def build_context(record: dict, now: int) -> dict:
     """
     Build the runtime context passed to tick(context).
     """
@@ -105,7 +107,7 @@ def build_context(record: dict) -> dict:
     folder = record["folder_path"]
 
     return {
-        "now": util.now_iso(),
+        "now": now,
         "log": lambda message: log_bproc_message(record, message),
         "state": state,
         "config": config,
@@ -148,8 +150,8 @@ def load_bproc_module(record: dict):
     return module
 
 
-def _compute_next_run(seconds: int) -> str:
+def _compute_next_run(seconds: int, last_run=None) -> int:
     """
-    Compute the next due time from the current moment.
+    Compute the next due time from the last run.
     """
-    return (util.parse_iso(util.now_iso()) + timedelta(seconds=seconds)).isoformat()
+    return util.compute_next_run(seconds, last_run)

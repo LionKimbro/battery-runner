@@ -103,7 +103,7 @@ This example relies on several parts of the runtime:
   This is the installed folder for the bproc. The example uses it to read `template.txt` and write `last-report.txt`.
 
 - `context["now"]`
-  This is the current timestamp string for the current run.
+  This is the current timestamp as epoch seconds for the current run.
 
 - `context["log"]`
   This writes a line to Battery Runner's stdout in the form `[short_id] message`.

@@ -52,7 +52,7 @@ Current keys are:
 
 ## `context["now"]`
 
-`context["now"]` is the current timestamp as an ISO string.
+`context["now"]` is the current timestamp as an integer number of seconds since the Unix epoch.
 
 Example:
 

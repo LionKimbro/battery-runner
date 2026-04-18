@@ -19,6 +19,18 @@ g = {
 }
 
 
+COLUMN_SPECS = [
+    {"title": "On", "minsize": 28},
+    {"title": "Lock", "minsize": 34},
+    {"title": "Schedule", "minsize": 84},
+    {"title": "Bproc", "minsize": 250},
+    {"title": "Actions", "minsize": 250},
+    {"title": "Last Run", "minsize": 165},
+    {"title": "Next Run", "minsize": 165},
+    {"title": "Last Error", "minsize": 220},
+]
+
+
 def launch_ui() -> None:
     """
     Start the Tkinter UI.
@@ -61,27 +73,8 @@ def _build_window(root) -> None:
 
     columns = ttk.Frame(root, padding=(10, 0, 10, 10))
     columns.grid(row=1, column=0, sticky="nsew")
-    columns.grid_rowconfigure(1, weight=1)
+    columns.grid_rowconfigure(0, weight=1)
     columns.grid_columnconfigure(0, weight=1)
-
-    labels = ttk.Frame(columns)
-    labels.grid(row=0, column=0, sticky="ew")
-    label_text = [
-        "On",
-        "Keep Going",
-        "Schedule",
-        "Bproc",
-        "Actions",
-        "Last Run",
-        "Next Run",
-        "Last Error",
-    ]
-    widths = [4, 10, 12, 22, 28, 20, 20, 36]
-
-    for index, text in enumerate(label_text):
-        ttk.Label(labels, text=text, width=widths[index]).grid(
-            row=0, column=index, sticky="w", padx=4, pady=(0, 4)
-        )
 
     canvas = tk.Canvas(columns, highlightthickness=0)
     scrollbar = ttk.Scrollbar(columns, orient="vertical", command=canvas.yview)
@@ -93,8 +86,8 @@ def _build_window(root) -> None:
 
     window_id = canvas.create_window((0, 0), window=body, anchor="nw")
     canvas.configure(yscrollcommand=scrollbar.set)
-    canvas.grid(row=1, column=0, sticky="nsew")
-    scrollbar.grid(row=1, column=1, sticky="ns")
+    canvas.grid(row=0, column=0, sticky="nsew")
+    scrollbar.grid(row=0, column=1, sticky="ns")
 
     columns.bind(
         "<Configure>",
@@ -105,6 +98,27 @@ def _build_window(root) -> None:
     )
 
     g["body"] = body
+    _configure_grid_columns(body)
+    _build_header_row(body)
+
+
+def _configure_grid_columns(frame) -> None:
+    """
+    Apply the shared column geometry used by headers and row data.
+    """
+    for index, spec in enumerate(COLUMN_SPECS):
+        frame.grid_columnconfigure(index, minsize=spec["minsize"])
+
+
+def _build_header_row(parent) -> None:
+    """
+    Build the header labels inside the same grid as the row data.
+    """
+    for index, spec in enumerate(COLUMN_SPECS):
+        padx = (1 if index < 3 else 3)
+        ttk.Label(parent, text=spec["title"]).grid(
+            row=0, column=index, sticky="w", padx=padx, pady=(0, 4)
+        )
 
 
 def _refresh_rows(force: bool = False) -> bool:
@@ -122,8 +136,9 @@ def _refresh_rows(force: bool = False) -> bool:
 
     g["rows"].clear()
     g["last_snapshot"] = snapshot
+    _build_header_row(body)
 
-    for row_index, record in enumerate(records):
+    for row_index, record in enumerate(records, start=1):
         _build_row(body, row_index, record)
 
     return True
@@ -170,13 +185,13 @@ def _build_row(parent, row_index: int, record: dict) -> None:
         parent,
         variable=enabled_var,
         command=lambda sid=short_id, var=enabled_var: _toggle_enabled(sid, var),
-    ).grid(row=row_index, column=0, sticky="w", padx=4, pady=4)
+    ).grid(row=row_index, column=0, sticky="w", padx=1, pady=3)
 
     ttk.Checkbutton(
         parent,
         variable=lock_var,
         command=lambda sid=short_id, var=lock_var: _toggle_lock(sid, var),
-    ).grid(row=row_index, column=1, sticky="w", padx=4, pady=4)
+    ).grid(row=row_index, column=1, sticky="w", padx=1, pady=3)
 
     schedule_menu = ttk.OptionMenu(
         parent,
@@ -185,14 +200,15 @@ def _build_row(parent, row_index: int, record: dict) -> None:
         *[label for label, _ in util.SCHEDULE_CHOICES],
         command=lambda label, sid=short_id: _change_schedule(sid, label),
     )
-    schedule_menu.grid(row=row_index, column=2, sticky="ew", padx=4, pady=4)
+    schedule_menu.configure(width=8)
+    schedule_menu.grid(row=row_index, column=2, sticky="w", padx=1, pady=3)
 
     ttk.Label(parent, text=f"{record['name']}  [{short_id}]").grid(
-        row=row_index, column=3, sticky="w", padx=4, pady=4
+        row=row_index, column=3, sticky="w", padx=3, pady=3
     )
 
     actions = ttk.Frame(parent)
-    actions.grid(row=row_index, column=4, sticky="w", padx=4, pady=4)
+    actions.grid(row=row_index, column=4, sticky="w", padx=3, pady=3)
     for text, fn in [
         ("Folder", lambda sid=short_id: _open_folder(sid)),
         ("Edit", lambda sid=short_id: _open_code_editor(sid)),
@@ -200,18 +216,18 @@ def _build_row(parent, row_index: int, record: dict) -> None:
         ("Run", lambda sid=short_id: _run_now(sid)),
         ("Errors", lambda sid=short_id: _open_error_window(sid)),
     ]:
-        ttk.Button(actions, text=text, command=fn).pack(side="left", padx=(0, 4))
+        ttk.Button(actions, text=text, command=fn).pack(side="left", padx=(0, 2))
 
     ttk.Label(parent, text=util.format_timestamp(runtime["last_run"])).grid(
-        row=row_index, column=5, sticky="w", padx=4, pady=4
+        row=row_index, column=5, sticky="w", padx=3, pady=3
     )
     ttk.Label(parent, text=util.format_timestamp(runtime["next_run"])).grid(
-        row=row_index, column=6, sticky="w", padx=4, pady=4
+        row=row_index, column=6, sticky="w", padx=3, pady=3
     )
 
     last_error = runtime["last_error"]["message"] or "-"
     ttk.Label(parent, text=last_error).grid(
-        row=row_index, column=7, sticky="w", padx=4, pady=4
+        row=row_index, column=7, sticky="w", padx=3, pady=3
     )
 
     g["rows"][short_id] = {

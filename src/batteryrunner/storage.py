@@ -117,7 +117,9 @@ def load_state(folder: Path) -> dict:
     """
     Load a bproc state file.
     """
-    return util.read_json(folder / "state.json", _default_state("missing"))
+    state = util.read_json(folder / "state.json", _default_state("missing"))
+    _normalize_runtime_timestamps(state)
+    return state
 
 
 def save_state(folder: Path, state: dict) -> None:
@@ -186,6 +188,7 @@ def set_schedule_seconds(short_id: str, seconds: int) -> dict:
     state = record["state"]
     state["schedule"]["seconds"] = seconds
     state["schedule"]["label"] = util.get_schedule_label(seconds)
+    state["runtime"]["next_run"] = util.compute_next_run(seconds, state["runtime"]["last_run"])
     save_state(record["folder_path"], state)
     record["state"] = state
     return record
@@ -314,7 +317,7 @@ def _build_bproc_config(
         "name": display_name,
         "folder": folder_name,
         "entry": "code.py",
-        "installed_at": util.now_iso(),
+        "installed_at": util.now_epoch(),
     }
 
     existing = util.read_json(folder / "bproc.json", {})
@@ -325,7 +328,7 @@ def _build_bproc_config(
         payload["name"] = payload.get("name") or display_name
         payload["folder"] = folder_name
         payload["entry"] = payload.get("entry") or "code.py"
-        payload["installed_at"] = payload.get("installed_at") or util.now_iso()
+        payload["installed_at"] = util.parse_timestamp(payload.get("installed_at")) or util.now_epoch()
 
     return payload
 
@@ -400,7 +403,7 @@ def _default_state(proc_id: str) -> dict:
         "runtime": {
             "running": False,
             "last_run": None,
-            "next_run": util.now_iso(),
+            "next_run": util.now_epoch(),
             "last_success": None,
             "last_error": {
                 "timestamp": None,
@@ -411,6 +414,22 @@ def _default_state(proc_id: str) -> dict:
         },
         "config": {},
     }
+
+
+def _normalize_runtime_timestamps(state: dict) -> None:
+    """
+    Normalize runtime timestamps to integer epoch seconds in memory.
+    """
+    runtime = state.get("runtime")
+    if not isinstance(runtime, dict):
+        return
+
+    for key in ["last_run", "next_run", "last_success"]:
+        runtime[key] = util.parse_timestamp(runtime.get(key))
+
+    last_error = runtime.get("last_error")
+    if isinstance(last_error, dict):
+        last_error["timestamp"] = util.parse_timestamp(last_error.get("timestamp"))
 
 
 def _default_code(base_name: str) -> str:

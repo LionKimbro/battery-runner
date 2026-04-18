@@ -64,7 +64,7 @@ Current shape:
   "runtime": {
     "running": false,
     "last_run": null,
-    "next_run": "2026-04-18T20:00:00+00:00",
+    "next_run": 1776542400,
     "last_success": null,
     "last_error": {
       "timestamp": null,
@@ -93,13 +93,13 @@ Current shape:
   If `false`, an error disables the bproc.
 
 - `runtime.last_run`
-  Timestamp of the last attempted run.
+  Epoch-seconds timestamp of the last attempted run.
 
 - `runtime.next_run`
-  Next scheduled runtime.
+  Next scheduled runtime, stored as epoch seconds.
 
 - `runtime.last_success`
-  Timestamp of the last successful run.
+  Epoch-seconds timestamp of the last successful run.
 
 - `runtime.last_error`
   Captured message and traceback from the most recent error.

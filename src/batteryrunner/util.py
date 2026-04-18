@@ -22,32 +22,42 @@ SCHEDULE_CHOICES = [
 ]
 
 
-def now_iso() -> str:
+def now_epoch() -> int:
     """
-    Return the current UTC timestamp in ISO-8601 form.
+    Return the current UTC timestamp in epoch seconds.
     """
-    return datetime.now(timezone.utc).isoformat()
+    return int(datetime.now(timezone.utc).timestamp())
 
 
-def parse_iso(value):
+def parse_timestamp(value):
     """
-    Parse an ISO timestamp or return None when empty.
+    Parse a stored timestamp into epoch seconds or return None when empty.
     """
     if not value:
         return None
 
-    normalized = value.replace("Z", "+00:00")
-    return datetime.fromisoformat(normalized)
+    if isinstance(value, int):
+        return value
+
+    if isinstance(value, float):
+        return int(value)
+
+    if isinstance(value, str):
+        normalized = value.replace("Z", "+00:00")
+        return int(datetime.fromisoformat(normalized).timestamp())
+
+    raise TypeError(f"Unsupported timestamp value: {value!r}")
 
 
-def format_timestamp(value: str | None) -> str:
+def format_timestamp(value) -> str:
     """
-    Turn an ISO timestamp into a short display string.
+    Turn a stored timestamp into a short display string.
     """
-    dt = parse_iso(value)
-    if dt is None:
+    seconds = parse_timestamp(value)
+    if seconds is None:
         return "-"
 
+    dt = datetime.fromtimestamp(seconds, timezone.utc)
     local_dt = dt.astimezone()
     return local_dt.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -101,6 +111,17 @@ def get_schedule_label(seconds: int) -> str:
             return label
 
     return f"{seconds} sec"
+
+
+def compute_next_run(seconds: int, last_run=None) -> int:
+    """
+    Compute the next run in epoch seconds.
+    """
+    base = parse_timestamp(last_run)
+    if base is None:
+        base = now_epoch()
+
+    return base + seconds
 
 
 def merge_defaults(base: dict, override: dict) -> dict:
