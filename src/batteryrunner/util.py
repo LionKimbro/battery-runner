@@ -7,18 +7,32 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+import hashlib
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 
 
 SCHEDULE_CHOICES = [
+    ("1 sec", 1),
+    ("2 sec", 2),
+    ("5 sec", 5),
+    ("10 sec", 10),
     ("15 sec", 15),
     ("30 sec", 30),
     ("1 min", 60),
     ("5 min", 300),
+    ("10 min", 600),
     ("15 min", 900),
+    ("30 min", 1800),
     ("1 hour", 3600),
+    ("4 hours", 14400),
+    ("8 hours", 28800),
+    ("12 hours", 43200),
+    ("1 day", 86400),
+    ("2 days", 172800),
+    ("5 days", 432000),
+    ("10 days", 864000),
 ]
 
 
@@ -101,6 +115,20 @@ def append_jsonl(path: Path, item: dict) -> None:
     with path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(item, ensure_ascii=True))
         handle.write("\n")
+
+
+def sha256_file(path: Path) -> str:
+    """
+    Return the SHA-256 hex digest of a file.
+    """
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(65536)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def slugify_name(name: str) -> str:

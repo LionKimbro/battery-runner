@@ -94,7 +94,7 @@ The installer details are described in [internals_bproc.md](./internals_bproc.md
 This example relies on several parts of the runtime:
 
 - `interval_seconds = 300`
-  Battery Runner reads this at install time and uses it as the default schedule if `state.json` did not already define one.
+  Battery Runner reads this from `code.py` and will rescan it if `code.py` changes, updating the schedule accordingly.
 
 - `context["config"]`
   This comes from `state.json`, specifically from the `config` object.

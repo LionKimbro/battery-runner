@@ -153,6 +153,8 @@ then the installed bproc starts with a clearer display name and a more sensible 
 
 This is especially useful for drop-offs that are meant to feel ready-to-use right away.
 
+Battery Runner also rescans these values when `code.py` changes, so they are not limited to first installation.
+
 ## A Good Basic Template
 
 ```python

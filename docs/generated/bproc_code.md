@@ -26,16 +26,21 @@ interval_seconds = 300
 
 ### `name`
 
-If present, `name` is used as the display name for the bproc during installation.
+If present, `name` is used as the display name for the bproc.
+
+Battery Runner now rescans this dynamically when `code.py` changes, so editing the file can update the displayed bproc name without reinstalling the bproc.
 
 ### `interval_seconds`
 
-If present, `interval_seconds` is used as the default interval schedule during installation, unless the dropped bproc already provided a `state.json` with schedule values.
+If present, `interval_seconds` is used as the bproc interval schedule.
 
-Important detail:
+Battery Runner now rescans this dynamically when `code.py` changes. If the value changes, Battery Runner updates:
 
-- these values are read at install time
-- editing them later in `code.py` does not currently resync them automatically into state
+- `state["schedule"]["seconds"]`
+- `state["schedule"]["label"]`
+- `state["runtime"]["next_run"]`
+
+The new `next_run` is recalculated from `last_run` using the new interval.
 
 ## The `context` Passed To `tick`
 

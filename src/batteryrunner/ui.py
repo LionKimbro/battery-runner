@@ -39,6 +39,37 @@ COLUMN_SPECS = [
 ]
 
 
+BPROC_CODE_HELP_TEXT = """context["now"] -- int -- seconds since epoch
+context["log"] -- fn(msg) -- post a log message to stdout and log.jsonl
+context["state"] -- {"id": str, "enabled": bool, "schedule": dict, "lock_on_error": bool, "runtime": dict, "config": dict}
+context["state"]["id"] -- str -- full UUID string for the bproc
+context["state"]["enabled"] -- bool -- whether the bproc is enabled
+context["state"]["schedule"] -- {"mode": str, "seconds": int, "label": str}
+context["state"]["schedule"]["mode"] -- str -- current schedule mode, presently "interval"
+context["state"]["schedule"]["seconds"] -- int -- run interval in seconds
+context["state"]["schedule"]["label"] -- str -- UI label for the schedule
+context["state"]["lock_on_error"] -- bool -- if false, an error disables the bproc
+context["state"]["runtime"] -- {"running": bool, "last_run": int|None, "next_run": int|None, "last_success": int|None, "last_error": dict, "error_count": int}
+context["state"]["runtime"]["running"] -- bool -- whether the bproc is currently marked running
+context["state"]["runtime"]["last_run"] -- int|None -- epoch seconds of the last attempted run
+context["state"]["runtime"]["next_run"] -- int|None -- epoch seconds of the next scheduled run
+context["state"]["runtime"]["last_success"] -- int|None -- epoch seconds of the last successful run
+context["state"]["runtime"]["last_error"] -- {"timestamp": int|None, "message": str|None, "traceback": str|None}
+context["state"]["runtime"]["error_count"] -- int -- number of recorded failures
+context["config"] -- dict -- short-cut to context["state"]["config"]
+context["root_path"] -- pathlib.Path -- path to .batteryrunner/
+context["bproc_path"] -- pathlib.Path -- path to this bproc's installed folder
+
+Required function:
+def tick(context):
+    pass
+
+Optional top-level metadata:
+name = "Friendly Name"
+interval_seconds = 300
+"""
+
+
 def launch_ui() -> None:
     """
     Start the Tkinter UI.
@@ -441,7 +472,6 @@ def _open_error_window(short_id: str) -> None:
         text="Copy",
         command=lambda value=text.get("1.0", "end-1c"): _copy_to_clipboard(value),
     ).pack(side="left", padx=(0, 6))
-    ttk.Button(buttons, text="Cancel", command=top.destroy).pack(side="left")
 
 
 def _open_log_window(short_id: str) -> None:
@@ -482,7 +512,6 @@ def _open_log_window(short_id: str) -> None:
         text="Copy",
         command=lambda value=text.get("1.0", "end-1c"): _copy_to_clipboard(value),
     ).pack(side="left", padx=(0, 6))
-    ttk.Button(buttons, text="Cancel", command=top.destroy).pack(side="left")
 
 
 def _reload_log_text(path, text_widget) -> None:
@@ -542,6 +571,7 @@ def _open_code_editor(short_id: str) -> None:
         title=f"Edit Code: {record['name']} [{short_id}]",
         initial_text=text,
         on_save=lambda value, sid=short_id: _save_code_and_refresh(sid, value),
+        help_text=BPROC_CODE_HELP_TEXT,
     )
 
 
@@ -609,7 +639,7 @@ def _open_create_bproc_dialog() -> None:
     name_entry.selection_range(0, "end")
 
 
-def _open_text_editor(title: str, initial_text: str, on_save) -> None:
+def _open_text_editor(title: str, initial_text: str, on_save, help_text: str | None = None) -> None:
     """
     Open a generic text editor window.
     """
@@ -630,7 +660,12 @@ def _open_text_editor(title: str, initial_text: str, on_save) -> None:
         text="Save",
         command=lambda: _handle_editor_save(top, text, on_save),
     ).pack(side="left", padx=(0, 6))
-    ttk.Button(buttons, text="Cancel", command=top.destroy).pack(side="left")
+    if help_text is not None:
+        ttk.Button(
+            buttons,
+            text="Help",
+            command=lambda value=help_text, parent=top: _open_help_window("Bproc Code Help", value, parent),
+        ).pack(side="left", padx=(0, 6))
 
 
 def _handle_editor_save(window, text_widget, on_save) -> None:
@@ -699,6 +734,35 @@ def _copy_to_clipboard(value: str) -> None:
     root.clipboard_clear()
     root.clipboard_append(value)
     root.update()
+
+
+def _open_help_window(title: str, help_text: str, parent) -> None:
+    """
+    Open a simple help window containing reference text.
+    """
+    top = tk.Toplevel(parent)
+    top.title(title)
+    top.geometry("980x520")
+    top.grid_columnconfigure(0, weight=1)
+    top.grid_rowconfigure(0, weight=1)
+
+    frame = ttk.Frame(top, padding=10)
+    frame.grid(row=0, column=0, sticky="nsew")
+    frame.grid_columnconfigure(0, weight=1)
+    frame.grid_rowconfigure(0, weight=1)
+
+    text = tk.Text(frame, wrap="none")
+    text.grid(row=0, column=0, sticky="nsew")
+    text.insert("1.0", help_text)
+
+    buttons = ttk.Frame(top, padding=(10, 0, 10, 10))
+    buttons.grid(row=1, column=0, sticky="e")
+    ttk.Button(
+        buttons,
+        text="Copy",
+        command=lambda value=text.get("1.0", "end-1c"): _copy_to_clipboard(value),
+    ).pack(side="left", padx=(0, 6))
+    ttk.Button(buttons, text="Cancel", command=top.destroy).pack(side="left")
 
 
 def _scan_drop_and_refresh() -> None:

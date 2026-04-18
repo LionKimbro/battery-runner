@@ -96,15 +96,29 @@ def list_bproc_entries() -> list[dict]:
     """
     inventory = load_inventory()
     entries = []
+    inventory_changed = False
 
     for short_id, item in inventory["brprocs"].items():
         folder = get_brprocs_root() / item["folder"]
         state = load_state(folder)
+        config = load_config(folder)
         entry = dict(item)
         entry["short_id"] = short_id
         entry["folder_path"] = folder
         entry["state"] = state
+        changed = _sync_bproc_metadata(entry, config, state, inventory)
+        if changed:
+            inventory_changed = True
+            state = load_state(folder)
+            config = load_config(folder)
+            entry = dict(inventory["brprocs"][short_id])
+            entry["short_id"] = short_id
+            entry["folder_path"] = folder
+            entry["state"] = state
         entries.append(entry)
+
+    if inventory_changed:
+        save_inventory(inventory)
 
     entries.sort(key=lambda item: (item["name"].lower(), item["short_id"]))
     return entries
@@ -120,12 +134,25 @@ def load_bproc_record(short_id: str) -> dict:
         raise KeyError(f"Unknown bproc short id: {short_id}")
 
     folder = get_brprocs_root() / item["folder"]
-    return {
+    state = load_state(folder)
+    config = load_config(folder)
+    record = {
         "short_id": short_id,
         **item,
         "folder_path": folder,
-        "state": load_state(folder),
+        "state": state,
     }
+    if _sync_bproc_metadata(record, config, state, inventory):
+        save_inventory(inventory)
+        item = inventory["brprocs"][short_id]
+        record = {
+            "short_id": short_id,
+            **item,
+            "folder_path": folder,
+            "state": load_state(folder),
+        }
+
+    return record
 
 
 def load_state(folder: Path) -> dict:
@@ -277,7 +304,8 @@ def save_bproc_code_text(short_id: str, text: str) -> dict:
     record = load_bproc_record(short_id)
     code_path = record["folder_path"] / "code.py"
     code_path.write_text(text, encoding="utf-8", newline="\n")
-    return record
+    _refresh_bproc_metadata(short_id)
+    return load_bproc_record(short_id)
 
 
 def _install_drop_item(item: Path) -> dict:
@@ -382,6 +410,7 @@ def _build_bproc_config(
         "folder": folder_name,
         "entry": "code.py",
         "installed_at": util.now_epoch(),
+        "code_hash": util.sha256_file(folder / "code.py"),
     }
 
     existing = util.read_json(folder / "bproc.json", {})
@@ -393,6 +422,7 @@ def _build_bproc_config(
         payload["folder"] = folder_name
         payload["entry"] = payload.get("entry") or "code.py"
         payload["installed_at"] = util.parse_timestamp(payload.get("installed_at")) or util.now_epoch()
+        payload["code_hash"] = payload.get("code_hash") or util.sha256_file(folder / "code.py")
 
     return payload
 
@@ -525,6 +555,61 @@ interval_seconds = {seconds}
 def tick(context):
     pass
 '''
+
+
+def _refresh_bproc_metadata(short_id: str) -> None:
+    """
+    Refresh stored metadata for one bproc from its code file.
+    """
+    inventory = load_inventory()
+    item = inventory["brprocs"].get(short_id)
+    if item is None:
+        raise KeyError(f"Unknown bproc short id: {short_id}")
+
+    folder = get_brprocs_root() / item["folder"]
+    record = {
+        "short_id": short_id,
+        **item,
+        "folder_path": folder,
+        "state": load_state(folder),
+    }
+    config = load_config(folder)
+    state = record["state"]
+    if _sync_bproc_metadata(record, config, state, inventory):
+        save_inventory(inventory)
+
+
+def _sync_bproc_metadata(record: dict, config: dict, state: dict, inventory: dict) -> bool:
+    """
+    Refresh name and interval metadata when code.py changed.
+    """
+    folder = record["folder_path"]
+    code_path = folder / "code.py"
+    if not code_path.exists():
+        return False
+
+    current_hash = util.sha256_file(code_path)
+    stored_hash = config.get("code_hash")
+    if stored_hash == current_hash:
+        return False
+
+    discovered = _read_bproc_module_metadata(code_path)
+    display_name = discovered.get("name") or record["name"]
+    seconds = discovered.get("interval_seconds")
+
+    config["name"] = display_name
+    config["code_hash"] = current_hash
+    save_config(folder, config)
+
+    inventory["brprocs"][record["short_id"]]["name"] = display_name
+
+    if seconds is not None:
+        state["schedule"]["seconds"] = seconds
+        state["schedule"]["label"] = util.get_schedule_label(seconds)
+        state["runtime"]["next_run"] = util.compute_next_run(seconds, state["runtime"]["last_run"])
+        save_state(folder, state)
+
+    return True
 
 
 def _delete_drop_item(item: Path) -> None:
