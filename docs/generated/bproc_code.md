@@ -103,6 +103,105 @@ It includes:
 
 In practice, bproc code should usually treat this as readable state, not as a direct persistence API. Battery Runner currently persists state before and after runs, but it does not provide a special transactional write API for mutating arbitrary nested values during `tick`.
 
+Current top-level shape:
+
+```python
+{
+    "id": str,
+    "enabled": bool,
+    "schedule": dict,
+    "lock_on_error": bool,
+    "runtime": dict,
+    "config": dict,
+}
+```
+
+### `context["state"]` Top-Level Keys
+
+- `id`
+  Type: `str`
+  The full UUID string for this bproc.
+
+- `enabled`
+  Type: `bool`
+  Whether the scheduler should run this bproc.
+
+- `schedule`
+  Type: `dict`
+  Scheduling configuration for the bproc.
+
+- `lock_on_error`
+  Type: `bool`
+  If `True`, an error does not disable the bproc. If `False`, an error disables it.
+
+- `runtime`
+  Type: `dict`
+  Runtime bookkeeping fields such as last run, next run, and error tracking.
+
+- `config`
+  Type: `dict`
+  User-editable configuration object for the bproc.
+
+### `context["state"]["schedule"]`
+
+Current keys:
+
+- `mode`
+  Type: `str`
+  The schedule mode. In the current implementation this is `"interval"`.
+
+- `seconds`
+  Type: `int`
+  The run interval in seconds.
+
+- `label`
+  Type: `str`
+  A human-facing schedule label used in the UI, such as `"5 min"` or `"1 hour"`.
+
+### `context["state"]["runtime"]`
+
+Current keys:
+
+- `running`
+  Type: `bool`
+  Whether the bproc is currently marked as running.
+
+- `last_run`
+  Type: `int | None`
+  Epoch-seconds timestamp of the last attempted run, or `None` if it has never run.
+
+- `next_run`
+  Type: `int | None`
+  Epoch-seconds timestamp of the next scheduled run, or `None` if unset.
+
+- `last_success`
+  Type: `int | None`
+  Epoch-seconds timestamp of the last successful run, or `None` if there has not been one yet.
+
+- `last_error`
+  Type: `dict`
+  Information about the most recent error.
+
+- `error_count`
+  Type: `int`
+  Count of how many failures have been recorded for this bproc.
+
+### `context["state"]["runtime"]["last_error"]`
+
+Current keys:
+
+- `timestamp`
+  Type: `int | None`
+  Epoch-seconds timestamp of the most recent error, or `None` if there is no recorded error.
+
+- `message`
+  Type: `str | None`
+  The exception message from the most recent error, or `None`.
+
+- `traceback`
+  Type: `str | None`
+  The stored traceback text from the most recent error, or `None`.
+
 ## `context["config"]`
 
 `context["config"]` is just:
@@ -125,7 +224,9 @@ def tick(context):
 
 ## `context["root_path"]`
 
-`context["root_path"]` is the path to the Battery Runner runtime root, usually:
+`context["root_path"]` is a `pathlib.Path`.
+
+It points to the Battery Runner runtime root, usually:
 
 ```text
 .batteryrunner/
@@ -135,7 +236,9 @@ You can use it to reach shared runtime areas like `inbox/` or `outbox/`, though 
 
 ## `context["bproc_path"]`
 
-`context["bproc_path"]` is the installed folder for the current bproc.
+`context["bproc_path"]` is a `pathlib.Path`.
+
+It is the installed folder for the current bproc.
 
 This is the main place to read bproc-local files or write bproc-local outputs.
 
