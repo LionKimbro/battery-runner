@@ -118,9 +118,17 @@ def build_context(record: dict, now: int) -> dict:
 
 def log_bproc_message(record: dict, message) -> None:
     """
-    Log a bproc message to stdout.
+    Log a bproc message to stdout and the bproc log.jsonl file.
     """
-    print(f"[{record['short_id']}] {message}")
+    text = str(message)
+    print(f"[{record['short_id']}] {text}")
+    util.append_jsonl(
+        storage.get_bproc_log_path(record["folder_path"]),
+        {
+            "timestamp": util.now_epoch(),
+            "message": text,
+        },
+    )
 
 
 def load_bproc_module(record: dict):

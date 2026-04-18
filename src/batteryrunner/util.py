@@ -93,6 +93,16 @@ def read_json(path: Path, default=None):
         return json.load(handle)
 
 
+def append_jsonl(path: Path, item: dict) -> None:
+    """
+    Append one JSON object as a JSONL line.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(item, ensure_ascii=True))
+        handle.write("\n")
+
+
 def slugify_name(name: str) -> str:
     """
     Make a safe short folder-friendly name.

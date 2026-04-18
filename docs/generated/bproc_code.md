@@ -84,6 +84,11 @@ produces something like:
 
 Use `context["log"]` for progress notes, status messages, and simple diagnostics that should show up in the host output.
 
+Battery Runner also appends each log call to the bproc's `log.jsonl` file as a JSON object with:
+
+- `timestamp`
+- `message`
+
 ## `context["state"]`
 
 `context["state"]` is the full persisted state object for the bproc.

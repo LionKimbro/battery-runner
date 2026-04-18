@@ -61,6 +61,21 @@ def get_drop_root() -> Path:
     return get_runtime_root() / "drop"
 
 
+def get_bproc_log_path(folder: Path) -> Path:
+    """
+    Return the per-bproc JSONL log path.
+    """
+    return folder / "log.jsonl"
+
+
+def clear_bproc_log(folder: Path) -> None:
+    """
+    Clear a bproc's log.jsonl file.
+    """
+    log_path = get_bproc_log_path(folder)
+    log_path.write_text("", encoding="utf-8", newline="\n")
+
+
 def load_inventory() -> dict:
     """
     Load the bproc inventory.
@@ -154,6 +169,55 @@ def process_drop() -> list[dict]:
         installed.append(_install_drop_item(item))
 
     return installed
+
+
+def create_bproc(name: str, seconds: int = 3600, lock_on_error: bool = True) -> dict:
+    """
+    Create a new starter bproc directly in brprocs/.
+    """
+    ensure_runtime_layout()
+
+    inventory = load_inventory()
+    proc_id = str(uuid.uuid4())
+    short_id = proc_id[:12]
+    base_name = util.slugify_name(name)
+    folder_name = f"{base_name}__{short_id}"
+    folder = get_brprocs_root() / folder_name
+    folder.mkdir(parents=True, exist_ok=False)
+
+    display_name = name.strip() or base_name
+    code_path = folder / "code.py"
+    code_path.write_text(_starter_code(display_name, seconds), encoding="utf-8", newline="\n")
+
+    config = _build_bproc_config(proc_id, short_id, display_name, folder_name, folder)
+    state = _default_state(proc_id)
+    state["schedule"]["seconds"] = seconds
+    state["schedule"]["label"] = util.get_schedule_label(seconds)
+    state["lock_on_error"] = lock_on_error
+    state["runtime"]["next_run"] = util.compute_next_run(seconds)
+
+    save_config(folder, config)
+    save_state(folder, state)
+
+    inventory["brprocs"][short_id] = {
+        "id": proc_id,
+        "name": config["name"],
+        "short_id": short_id,
+        "folder": folder_name,
+        "entry": "code.py",
+        "installed_at": config["installed_at"],
+        "source": {"type": "manual"},
+    }
+    save_inventory(inventory)
+
+    return {
+        "short_id": short_id,
+        "id": proc_id,
+        "name": config["name"],
+        "folder": folder_name,
+        "folder_path": folder,
+        "state": state,
+    }
 
 
 def set_enabled(short_id: str, enabled: bool) -> dict:
@@ -443,6 +507,23 @@ Battery Runner starter bproc for {base_name}.
 
 def tick(context):
     context["log"]("tick")
+'''
+
+
+def _starter_code(display_name: str, seconds: int) -> str:
+    """
+    Create a starter code.py for a new manual bproc.
+    """
+    return f'''"""
+Battery Runner bproc: {display_name}
+"""
+
+name = {display_name!r}
+interval_seconds = {seconds}
+
+
+def tick(context):
+    pass
 '''
 
 

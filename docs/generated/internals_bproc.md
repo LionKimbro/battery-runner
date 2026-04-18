@@ -21,6 +21,7 @@ A bproc folder typically contains:
 - `code.py`
 - `state.json`
 - `bproc.json`
+- `log.jsonl`
 - any support files that were included in the drop-off
 
 Examples of support files:
@@ -128,6 +129,18 @@ Current shape:
 ```
 
 Battery Runner currently preserves a dropped `bproc.json` if one was supplied, then normalizes key fields like ID, short ID, folder, and entry.
+
+## `log.jsonl`
+
+This is the per-bproc append-only log file written by `context["log"]`.
+
+Each line is one JSON object. Current shape:
+
+```json
+{"timestamp":1776542400,"message":"starting work"}
+```
+
+Battery Runner writes this file inside the bproc folder, so logs stay local to the bproc that produced them.
 
 ## Installation Behavior
 

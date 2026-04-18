@@ -89,6 +89,9 @@ def _build_window(root) -> None:
     ttk.Button(buttons, text="Scan Drop", command=_scan_drop_and_refresh).pack(
         side="left", padx=(8, 0)
     )
+    ttk.Button(buttons, text="Create Bproc", command=_open_create_bproc_dialog).pack(
+        side="left", padx=(8, 0)
+    )
     ttk.Button(buttons, text="Tick Due", command=_tick_due_and_refresh).pack(
         side="left", padx=(8, 0)
     )
@@ -197,6 +200,7 @@ def _build_display_plan(records: list[dict]) -> dict:
             "last_run": runtime["last_run"],
             "next_run": runtime["next_run"],
             "last_error_message": runtime["last_error"]["message"] or "-",
+            "has_logs": _bproc_has_logs(record),
         }
 
     return plan
@@ -300,14 +304,18 @@ def _create_row_widgets(record: dict) -> None:
 
     actions = ttk.Frame(parent)
     actions.grid(column=4, sticky="w", padx=3, pady=3)
+    buttons = {}
     for text, fn in [
         ("Folder", lambda sid=short_id: _open_folder(sid)),
         ("Edit", lambda sid=short_id: _open_code_editor(sid)),
         ("Conf", lambda sid=short_id: _open_config_editor(sid)),
         ("Run", lambda sid=short_id: _run_now(sid)),
+        ("Logs", lambda sid=short_id: _open_log_window(sid)),
         ("Errors", lambda sid=short_id: _open_error_window(sid)),
     ]:
-        ttk.Button(actions, text=text, command=fn).pack(side="left", padx=(0, 2))
+        button = ttk.Button(actions, text=text, command=fn)
+        button.pack(side="left", padx=(0, 2))
+        buttons[text] = button
 
     last_run_widget = ttk.Label(parent)
     last_run_widget.grid(column=5, sticky="w", padx=3, pady=3)
@@ -325,6 +333,7 @@ def _create_row_widgets(record: dict) -> None:
         "schedule_widget": schedule_menu,
         "name_widget": name_widget,
         "actions_widget": actions,
+        "action_buttons": buttons,
         "last_run_widget": last_run_widget,
         "next_run_widget": next_run_widget,
         "error_widget": error_widget,
@@ -354,6 +363,10 @@ def _apply_row_plan(short_id: str, row_plan: dict) -> None:
     row["last_run_widget"].configure(text=util.format_timestamp(row_plan["last_run"]))
     row["next_run_widget"].configure(text=util.format_timestamp(row_plan["next_run"]))
     row["error_widget"].configure(text=row_plan["last_error_message"])
+    has_error = row_plan["last_error_message"] != "-"
+    has_logs = row_plan["has_logs"]
+    row["action_buttons"]["Logs"].configure(state=("normal" if has_logs else "disabled"))
+    row["action_buttons"]["Errors"].configure(state=("normal" if has_error else "disabled"))
 
 
 def _toggle_enabled(short_id: str, var) -> None:
@@ -431,6 +444,76 @@ def _open_error_window(short_id: str) -> None:
     ttk.Button(buttons, text="Cancel", command=top.destroy).pack(side="left")
 
 
+def _open_log_window(short_id: str) -> None:
+    """
+    Show the per-bproc log.jsonl contents.
+    """
+    record = storage.load_bproc_record(short_id)
+    log_path = storage.get_bproc_log_path(record["folder_path"])
+
+    top = tk.Toplevel(g["root"])
+    top.title(f"Logs: {record['name']} [{short_id}]")
+    top.geometry("900x480")
+    top.grid_columnconfigure(0, weight=1)
+    top.grid_rowconfigure(0, weight=1)
+
+    text = tk.Text(top, wrap="none")
+    text.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+
+    if log_path.exists():
+        text.insert("1.0", log_path.read_text(encoding="utf-8"))
+    else:
+        text.insert("1.0", "No logs yet.\n")
+
+    buttons = ttk.Frame(top, padding=(10, 0, 10, 10))
+    buttons.grid(row=1, column=0, sticky="e")
+    ttk.Button(
+        buttons,
+        text="Clear",
+        command=lambda sid=short_id, path=log_path, widget=text: _clear_log_and_refresh(sid, path, widget),
+    ).pack(side="left", padx=(0, 6))
+    ttk.Button(
+        buttons,
+        text="Refresh",
+        command=lambda path=log_path, widget=text: _reload_log_text(path, widget),
+    ).pack(side="left", padx=(0, 6))
+    ttk.Button(
+        buttons,
+        text="Copy",
+        command=lambda value=text.get("1.0", "end-1c"): _copy_to_clipboard(value),
+    ).pack(side="left", padx=(0, 6))
+    ttk.Button(buttons, text="Cancel", command=top.destroy).pack(side="left")
+
+
+def _reload_log_text(path, text_widget) -> None:
+    """
+    Reload log.jsonl into an open text widget.
+    """
+    text_widget.delete("1.0", "end")
+    if path.exists():
+        text_widget.insert("1.0", path.read_text(encoding="utf-8"))
+    else:
+        text_widget.insert("1.0", "No logs yet.\n")
+
+
+def _clear_log_and_refresh(short_id: str, path, text_widget) -> None:
+    """
+    Clear the per-bproc log file and refresh both views.
+    """
+    record = storage.load_bproc_record(short_id)
+    storage.clear_bproc_log(record["folder_path"])
+    _reload_log_text(path, text_widget)
+    _refresh_rows()
+
+
+def _bproc_has_logs(record: dict) -> bool:
+    """
+    Return True when a bproc has a non-empty log.jsonl file.
+    """
+    log_path = storage.get_bproc_log_path(record["folder_path"])
+    return log_path.exists() and log_path.stat().st_size > 0
+
+
 def _clear_error_and_close(short_id: str, window) -> None:
     """
     Clear the stored last error.
@@ -476,6 +559,56 @@ def _open_config_editor(short_id: str) -> None:
     )
 
 
+def _open_create_bproc_dialog() -> None:
+    """
+    Prompt for metadata and create a new starter bproc.
+    """
+    top = tk.Toplevel(g["root"])
+    top.title("Create Bproc")
+    top.geometry("380x220")
+    top.resizable(False, False)
+    top.grid_columnconfigure(1, weight=1)
+
+    name_var = tk.StringVar(value="New Bproc")
+    schedule_var = tk.StringVar(value="1 hour")
+    lock_var = tk.BooleanVar(value=True)
+
+    ttk.Label(top, text="Name").grid(row=0, column=0, sticky="w", padx=10, pady=(12, 6))
+    name_entry = ttk.Entry(top, textvariable=name_var)
+    name_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=(12, 6))
+
+    ttk.Label(top, text="Schedule").grid(row=1, column=0, sticky="w", padx=10, pady=6)
+    schedule_menu = ttk.OptionMenu(
+        top,
+        schedule_var,
+        "1 hour",
+        *[label for label, _ in util.SCHEDULE_CHOICES],
+    )
+    schedule_menu.configure(width=10)
+    schedule_menu.grid(row=1, column=1, sticky="w", padx=(0, 10), pady=6)
+
+    ttk.Label(top, text="Lock").grid(row=2, column=0, sticky="w", padx=10, pady=6)
+    ttk.Checkbutton(top, variable=lock_var).grid(row=2, column=1, sticky="w", padx=(0, 10), pady=6)
+
+    note = (
+        "Creates a starter bproc with code.py,\n"
+        "bproc.json, and state.json."
+    )
+    ttk.Label(top, text=note).grid(row=3, column=0, columnspan=2, sticky="w", padx=10, pady=(6, 10))
+
+    buttons = ttk.Frame(top)
+    buttons.grid(row=4, column=0, columnspan=2, sticky="e", padx=10, pady=(0, 10))
+    ttk.Button(
+        buttons,
+        text="Create",
+        command=lambda: _create_bproc_from_dialog(top, name_var, schedule_var, lock_var),
+    ).pack(side="left", padx=(0, 6))
+    ttk.Button(buttons, text="Cancel", command=top.destroy).pack(side="left")
+
+    name_entry.focus_set()
+    name_entry.selection_range(0, "end")
+
+
 def _open_text_editor(title: str, initial_text: str, on_save) -> None:
     """
     Open a generic text editor window.
@@ -512,6 +645,32 @@ def _handle_editor_save(window, text_widget, on_save) -> None:
 
     window.destroy()
     _refresh_rows()
+
+
+def _create_bproc_from_dialog(window, name_var, schedule_var, lock_var) -> None:
+    """
+    Validate create-bproc form data and create the new bproc.
+    """
+    name = name_var.get().strip()
+    if not name:
+        messagebox.showerror("Create Bproc", "Name is required.", parent=window)
+        return
+
+    mapping = dict(util.SCHEDULE_CHOICES)
+    try:
+        seconds = mapping[schedule_var.get()]
+    except KeyError:
+        messagebox.showerror("Create Bproc", "Choose a valid schedule.", parent=window)
+        return
+
+    try:
+        storage.create_bproc(name, seconds, bool(lock_var.get()))
+    except Exception as exc:
+        messagebox.showerror("Create Bproc", str(exc), parent=window)
+        return
+
+    window.destroy()
+    _refresh_rows(force=True)
 
 
 def _save_code_and_refresh(short_id: str, value: str) -> None:
