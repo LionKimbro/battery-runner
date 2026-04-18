@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "batteryrunner"
+version = "0.1.0"
+description = "A small Tkinter host for filesystem-backed Python bprocs."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "CC0-1.0" }
+authors = [
+  { name = "Lion Kimbro" }
+]
+dependencies = [
+  "lionscliapp>=0.1.0",
+]
+keywords = ["bproc", "filesystem", "scheduler", "tkinter", "automation"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: X11 Applications :: Tk",
+  "Intended Audience :: Developers",
+  "License :: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.scripts]
+battery-runner = "batteryrunner.cli:main"
+
+[project.urls]
+Repository = "https://github.com/lionkimbro/battery-runner"
+Issues = "https://github.com/lionkimbro/battery-runner/issues"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,246 @@
+{
+  "document": {
+    "document-id": "battery-runner.spec.impl.v1",
+    "title": "Battery Runner (bproc host) – Implementation Specification",
+    "purpose": "Provide a complete, implementation-ready specification for a minimal but functional Battery Runner system with Tkinter UI, filesystem-managed bprocs, and simple scheduling.",
+    "status": "draft",
+    "created": "2026-04-18",
+    "tags": ["battery-runner", "bproc", "tkinter", "filesystem", "agent-host", "experimental"]
+  },
+
+  "design_intent": {
+    "summary": "A lightweight, single-process system that hosts small Python behavior modules (bprocs), allows them to be dynamically installed, scheduled, and controlled via a Tkinter GUI, and persists all state to the filesystem.",
+    "priorities": [
+      "Fast implementation (target: a few hours)",
+      "Drop-in extensibility (add files → behavior appears)",
+      "Human-legible filesystem state",
+      "Robustness (errors do not crash system)",
+      "Simple mental model"
+    ],
+    "non_goals": [
+      "Distributed execution",
+      "Strict scheduling guarantees",
+      "High performance",
+      "Security hardening",
+      "Complex plugin systems"
+    ]
+  },
+
+  "filesystem_layout": {
+    "root": ".batteryrunner/",
+    "structure": [
+      ".batteryrunner/",
+      "  brprocs/",
+      "    <name>__<shortid>/",
+      "      bproc.json",
+      "      code.py",
+      "      state.json",
+      "  brprocs-inventory.json",
+      "  drop/",
+      "  inbox/",
+      "  outbox/"
+    ]
+  },
+
+  "identity_model": {
+    "guid": "Each bproc is assigned a UUID (string).",
+    "short_id": "First 12 characters of GUID, used for filenames and keys.",
+    "folder_naming": "<name>__<short_id>",
+    "inventory_key": "short_id"
+  },
+
+  "inventory_file": {
+    "path": ".batteryrunner/brprocs-inventory.json",
+    "description": "Index of all installed bprocs.",
+    "schema": {
+      "version": "string",
+      "brprocs": {
+        "<short_id>": {
+          "id": "full GUID",
+          "name": "string",
+          "short_id": "string",
+          "folder": "string",
+          "entry": "string (python file)",
+          "installed_at": "ISO timestamp",
+          "source": {
+            "type": "string (drop | silkroad | manual)"
+          }
+        }
+      }
+    }
+  },
+
+  "bproc_state_file": {
+    "path": ".batteryrunner/brprocs/<folder>/state.json",
+    "description": "Runtime and configuration state for a bproc.",
+    "schema": {
+      "id": "GUID",
+      "enabled": "bool",
+      "schedule": {
+        "mode": "interval",
+        "seconds": "int",
+        "label": "string"
+      },
+      "lock_on_error": "bool",
+      "runtime": {
+        "running": "bool",
+        "last_run": "ISO timestamp or null",
+        "next_run": "ISO timestamp or null",
+        "last_success": "ISO timestamp or null",
+        "last_error": {
+          "timestamp": "ISO timestamp or null",
+          "message": "string or null",
+          "traceback": "string or null"
+        },
+        "error_count": "int"
+      },
+      "config": "object (user-defined JSON)"
+    }
+  },
+
+  "drop_installation": {
+    "path": ".batteryrunner/drop/",
+    "behavior": [
+      "Scan drop folder periodically (e.g. every 2 seconds)",
+      "For each file or folder:",
+      "  Generate GUID",
+      "  Derive name from filename/folder",
+      "  Create new brproc folder",
+      "  Copy contents into brproc folder",
+      "  Ensure code.py exists (wrap if needed)",
+      "  Create bproc.json if missing",
+      "  Create default state.json",
+      "  Add entry to inventory",
+      "  Delete original drop item"
+    ]
+  },
+
+  "bproc_interface": {
+    "entry_file": "code.py",
+    "required_function": "def tick(context): pass",
+    "optional_fields": [
+      "name",
+      "interval_seconds"
+    ],
+    "execution": "tick(context) is called when scheduled"
+  },
+
+  "runtime_context": {
+    "fields": [
+      "now (timestamp)",
+      "log(message)",
+      "state (dict for this bproc)",
+      "config (dict for this bproc)",
+      "root_path (Path)",
+      "bproc_path (Path)"
+    ]
+  },
+
+  "scheduler": {
+    "loop_interval_seconds": 0.5,
+    "rules": [
+      "If enabled == false → skip",
+      "If running == true → skip",
+      "If last_error exists AND lock_on_error == false → skip",
+      "If now >= next_run → execute"
+    ],
+    "execution_flow": [
+      "Mark running = true",
+      "Set last_run = now",
+      "Try:",
+      "  call tick(context)",
+      "  set last_success = now",
+      "  clear last_error",
+      "Catch exception:",
+      "  store timestamp, message, traceback",
+      "  increment error_count",
+      "Finally:",
+      "  running = false",
+      "  compute next_run = now + schedule.seconds"
+    ]
+  },
+
+  "module_loading": {
+    "strategy": [
+      "Each bproc folder is loaded dynamically",
+      "Use importlib to load code.py",
+      "Reload module if file timestamp changes",
+      "Maintain module cache keyed by short_id"
+    ],
+    "error_handling": "Import errors captured and stored in last_error"
+  },
+
+  "tkinter_ui": {
+    "layout": {
+      "grid": "3 columns x ~10 rows",
+      "scrollable": true
+    },
+    "per_bproc_panel": {
+      "elements": [
+        "On/Off toggle (green/red)",
+        "Lock toggle (🔒 / 🔓)",
+        "Schedule dropdown",
+        "Title label",
+        "Buttons: folder, edit, conf, run, errors",
+        "Last run label",
+        "Next run label"
+      ]
+    },
+    "button_behaviors": {
+      "folder": "Open OS file explorer to bproc folder",
+      "edit": "Open Tkinter Text editor for code.py",
+      "conf": "Open JSON editor for config",
+      "run": "Immediately run if not running",
+      "errors": "Open error viewer window"
+    },
+    "error_window": {
+      "components": [
+        "Text widget with traceback",
+        "Buttons: Clear, Copy, Cancel"
+      ]
+    },
+    "state_sync": [
+      "UI reads from state.json",
+      "UI writes changes immediately to disk",
+      "UI refreshes periodically (e.g. every 1 second)"
+    ]
+  },
+
+  "logging": {
+    "minimum": [
+      "print() for console",
+      "context.log() for bproc messages"
+    ]
+  },
+
+  "initial_defaults": {
+    "enabled": true,
+    "schedule": {
+      "mode": "interval",
+      "seconds": 3600,
+      "label": "x1/hour"
+    },
+    "lock_on_error": true
+  },
+
+  "implementation_steps": [
+    "Create filesystem bootstrap",
+    "Implement inventory load/save",
+    "Implement drop folder processing",
+    "Implement scheduler loop",
+    "Implement module loading",
+    "Implement basic Tkinter UI",
+    "Wire UI to state.json",
+    "Add run + error handling",
+    "Add editors (code + config)"
+  ],
+
+  "success_criteria": [
+    "Dropping a .py file creates a runnable bproc",
+    "UI displays all bprocs",
+    "User can toggle enable/disable",
+    "User can run immediately",
+    "Errors are captured and displayed",
+    "System does not crash on bproc failure"
+  ]
+}
