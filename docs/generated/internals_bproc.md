@@ -54,7 +54,7 @@ Current shape:
 
 ```json
 {
-  "id": "GUID",
+  "uuid": "UUID",
   "enabled": true,
   "schedule": {
     "mode": "interval",
@@ -119,7 +119,7 @@ Current shape:
 
 ```json
 {
-  "id": "GUID",
+  "uuid": "UUID",
   "short_id": "abc123def456",
   "name": "Message Reporter",
   "folder": "message_reporter__abc123def456",
@@ -128,7 +128,7 @@ Current shape:
 }
 ```
 
-Battery Runner currently preserves a dropped `bproc.json` if one was supplied, then normalizes key fields like ID, short ID, folder, and entry.
+Battery Runner currently preserves a dropped `bproc.json` if one was supplied, then normalizes key fields like UUID, short ID, folder, and entry.
 
 ## `log.jsonl`
 
@@ -146,8 +146,8 @@ Battery Runner writes this file inside the bproc folder, so logs stay local to t
 
 When a dropped item is installed:
 
-- the new bproc gets a GUID
-- the short ID is the first 12 characters of that GUID string
+- the new bproc gets a UUID
+- the short ID is a collision-resistant short identifier derived from the full UUID
 - the folder name becomes `<slug>__<shortid>`
 - `code.py` is ensured to exist
 - `state.json` is created or merged from defaults

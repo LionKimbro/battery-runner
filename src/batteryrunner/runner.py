@@ -21,7 +21,7 @@ def run_scheduler_pass() -> list[dict]:
     Scan due bprocs and run what is ready.
     """
     storage.ensure_runtime_layout()
-    storage.process_drop()
+    storage.process_intake()
 
     ran = []
     for record in storage.list_bproc_entries():

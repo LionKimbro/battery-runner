@@ -42,8 +42,8 @@ COLUMN_SPECS = [
 
 BPROC_CODE_HELP_TEXT = """context["now"] -- int -- seconds since epoch
 context["log"] -- fn(msg) -- post a log message to stdout and log.jsonl
-context["state"] -- {"id": str, "enabled": bool, "schedule": dict, "lock_on_error": bool, "runtime": dict, "config": dict}
-context["state"]["id"] -- str -- full UUID string for the bproc
+context["state"] -- {"uuid": str, "enabled": bool, "schedule": dict, "lock_on_error": bool, "runtime": dict, "config": dict}
+context["state"]["uuid"] -- str -- full UUID string for the bproc
 context["state"]["enabled"] -- bool -- whether the bproc is enabled
 context["state"]["schedule"] -- {"mode": str, "seconds": int, "label": str}
 context["state"]["schedule"]["mode"] -- str -- current schedule mode, presently "interval"
@@ -66,6 +66,7 @@ def tick(context):
     pass
 
 Optional top-level metadata:
+uuid = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 name = "Friendly Name"
 interval_seconds = 300
 """
@@ -652,6 +653,7 @@ def _open_create_bproc_dialog() -> None:
     top.grid_columnconfigure(1, weight=1)
 
     name_var = tk.StringVar(value="New Bproc")
+    uuid_var = tk.StringVar(value="")
     schedule_var = tk.StringVar(value="1 hour")
     lock_var = tk.BooleanVar(value=True)
 
@@ -659,7 +661,11 @@ def _open_create_bproc_dialog() -> None:
     name_entry = ttk.Entry(top, textvariable=name_var)
     name_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=(12, 6))
 
-    ttk.Label(top, text="Schedule").grid(row=1, column=0, sticky="w", padx=10, pady=6)
+    ttk.Label(top, text="UUID").grid(row=1, column=0, sticky="w", padx=10, pady=6)
+    uuid_entry = ttk.Entry(top, textvariable=uuid_var)
+    uuid_entry.grid(row=1, column=1, sticky="ew", padx=(0, 10), pady=6)
+
+    ttk.Label(top, text="Schedule").grid(row=2, column=0, sticky="w", padx=10, pady=6)
     schedule_menu = ttk.OptionMenu(
         top,
         schedule_var,
@@ -667,23 +673,24 @@ def _open_create_bproc_dialog() -> None:
         *[label for label, _ in util.SCHEDULE_CHOICES],
     )
     schedule_menu.configure(width=10)
-    schedule_menu.grid(row=1, column=1, sticky="w", padx=(0, 10), pady=6)
+    schedule_menu.grid(row=2, column=1, sticky="w", padx=(0, 10), pady=6)
 
-    ttk.Label(top, text="Lock").grid(row=2, column=0, sticky="w", padx=10, pady=6)
-    ttk.Checkbutton(top, variable=lock_var).grid(row=2, column=1, sticky="w", padx=(0, 10), pady=6)
+    ttk.Label(top, text="Lock").grid(row=3, column=0, sticky="w", padx=10, pady=6)
+    ttk.Checkbutton(top, variable=lock_var).grid(row=3, column=1, sticky="w", padx=(0, 10), pady=6)
 
     note = (
         "Creates a starter bproc with code.py,\n"
-        "bproc.json, and state.json."
+        "bproc.json, and state.json.\n"
+        "Leave UUID blank to auto-generate one."
     )
-    ttk.Label(top, text=note).grid(row=3, column=0, columnspan=2, sticky="w", padx=10, pady=(6, 10))
+    ttk.Label(top, text=note).grid(row=4, column=0, columnspan=2, sticky="w", padx=10, pady=(6, 10))
 
     buttons = ttk.Frame(top)
-    buttons.grid(row=4, column=0, columnspan=2, sticky="e", padx=10, pady=(0, 10))
+    buttons.grid(row=5, column=0, columnspan=2, sticky="e", padx=10, pady=(0, 10))
     ttk.Button(
         buttons,
         text="Create",
-        command=lambda: _create_bproc_from_dialog(top, name_var, schedule_var, lock_var),
+        command=lambda: _create_bproc_from_dialog(top, name_var, uuid_var, schedule_var, lock_var),
     ).pack(side="left", padx=(0, 6))
     ttk.Button(buttons, text="Cancel", command=top.destroy).pack(side="left")
 
@@ -734,7 +741,7 @@ def _handle_editor_save(window, text_widget, on_save) -> None:
     _refresh_rows()
 
 
-def _create_bproc_from_dialog(window, name_var, schedule_var, lock_var) -> None:
+def _create_bproc_from_dialog(window, name_var, uuid_var, schedule_var, lock_var) -> None:
     """
     Validate create-bproc form data and create the new bproc.
     """
@@ -751,7 +758,17 @@ def _create_bproc_from_dialog(window, name_var, schedule_var, lock_var) -> None:
         return
 
     try:
-        _run_with_worker_paused(storage.create_bproc, name, seconds, bool(lock_var.get()))
+        proc_uuid = uuid_var.get().strip()
+        if proc_uuid:
+            _run_with_worker_paused(
+                storage.create_bproc_with_id,
+                name,
+                proc_uuid,
+                seconds,
+                bool(lock_var.get()),
+            )
+        else:
+            _run_with_worker_paused(storage.create_bproc, name, seconds, bool(lock_var.get()))
     except Exception as exc:
         messagebox.showerror("Create Bproc", str(exc), parent=window)
         return

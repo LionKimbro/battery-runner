@@ -54,7 +54,7 @@ Current shape:
   "version": "v1",
   "brprocs": {
     "abc123def456": {
-      "id": "full-guid-string",
+      "uuid": "full-uuid-string",
       "name": "Message Reporter",
       "short_id": "abc123def456",
       "folder": "message_reporter__abc123def456",
@@ -75,6 +75,12 @@ Important fields:
 
 - `brprocs`
   Object keyed by short ID.
+
+- `uuid`
+  Canonical per-bproc UUID. Legacy `id` may still be accepted on import for compatibility, but authored/current data should use `uuid`.
+
+- `short_id`
+  A collision-resistant short identifier derived from the full UUID and used for inventory keys and folder suffixes.
 
 - `source.type`
   Currently always `"drop"` in this implementation.

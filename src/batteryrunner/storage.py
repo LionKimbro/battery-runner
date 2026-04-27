@@ -61,6 +61,20 @@ def get_drop_root() -> Path:
     return get_runtime_root() / "drop"
 
 
+def get_inbox_root() -> Path:
+    """
+    Return the inbox directory.
+    """
+    return get_runtime_root() / "inbox"
+
+
+def get_project_log_path() -> Path:
+    """
+    Return the project-wide JSONL log path.
+    """
+    return get_runtime_root() / "project-log.jsonl"
+
+
 def get_bproc_log_path(folder: Path) -> Path:
     """
     Return the per-bproc JSONL log path.
@@ -80,7 +94,10 @@ def load_inventory() -> dict:
     """
     Load the bproc inventory.
     """
-    return util.read_json(get_inventory_path(), {"version": "v1", "brprocs": {}})
+    inventory = util.read_json(get_inventory_path(), {"version": "v1", "brprocs": {}})
+    for item in inventory["brprocs"].values():
+        _normalize_legacy_uuid_fields(item)
+    return inventory
 
 
 def save_inventory(inventory: dict) -> None:
@@ -160,6 +177,7 @@ def load_state(folder: Path) -> dict:
     Load a bproc state file.
     """
     state = util.read_json(folder / "state.json", _default_state("missing"))
+    _normalize_legacy_uuid_fields(state)
     _normalize_runtime_timestamps(state)
     return state
 
@@ -175,7 +193,9 @@ def load_config(folder: Path) -> dict:
     """
     Load bproc.json.
     """
-    return util.read_json(folder / "bproc.json", {})
+    config = util.read_json(folder / "bproc.json", {})
+    _normalize_legacy_uuid_fields(config)
+    return config
 
 
 def save_config(folder: Path, data: dict) -> None:
@@ -189,12 +209,23 @@ def process_drop() -> list[dict]:
     """
     Install every item currently sitting in the drop directory.
     """
-    ensure_runtime_layout()
+    return _process_intake_root(get_drop_root(), "drop")
+
+
+def process_inbox() -> list[dict]:
+    """
+    Install every item currently sitting in the inbox directory.
+    """
+    return _process_intake_root(get_inbox_root(), "inbox")
+
+
+def process_intake() -> list[dict]:
+    """
+    Process all active intake directories.
+    """
     installed = []
-
-    for item in sorted(get_drop_root().iterdir(), key=lambda path: path.name.lower()):
-        installed.append(_install_drop_item(item))
-
+    installed.extend(process_drop())
+    installed.extend(process_inbox())
     return installed
 
 
@@ -205,8 +236,38 @@ def create_bproc(name: str, seconds: int = 3600, lock_on_error: bool = True) -> 
     ensure_runtime_layout()
 
     inventory = load_inventory()
-    proc_id = str(uuid.uuid4())
-    short_id = proc_id[:12]
+    proc_id = _generate_unique_proc_id(inventory)
+    return _create_bproc_with_id(inventory, proc_id, name, seconds, lock_on_error)
+
+
+def create_bproc_with_id(
+    name: str,
+    proc_id: str,
+    seconds: int = 3600,
+    lock_on_error: bool = True,
+) -> dict:
+    """
+    Create a new starter bproc with an explicit GUID.
+    """
+    ensure_runtime_layout()
+
+    inventory = load_inventory()
+    proc_id = _normalize_requested_proc_id(proc_id)
+    _ensure_proc_id_available(inventory, proc_id)
+    return _create_bproc_with_id(inventory, proc_id, name, seconds, lock_on_error)
+
+
+def _create_bproc_with_id(
+    inventory: dict,
+    proc_id: str,
+    name: str,
+    seconds: int,
+    lock_on_error: bool,
+) -> dict:
+    """
+    Create a new starter bproc using a chosen GUID.
+    """
+    short_id = _derive_short_id(inventory, proc_id)
     base_name = util.slugify_name(name)
     folder_name = f"{base_name}__{short_id}"
     folder = get_brprocs_root() / folder_name
@@ -214,7 +275,7 @@ def create_bproc(name: str, seconds: int = 3600, lock_on_error: bool = True) -> 
 
     display_name = name.strip() or base_name
     code_path = folder / "code.py"
-    code_path.write_text(_starter_code(display_name, seconds), encoding="utf-8", newline="\n")
+    code_path.write_text(_starter_code(proc_id, display_name, seconds), encoding="utf-8", newline="\n")
 
     config = _build_bproc_config(proc_id, short_id, display_name, folder_name, folder)
     state = _default_state(proc_id)
@@ -227,7 +288,7 @@ def create_bproc(name: str, seconds: int = 3600, lock_on_error: bool = True) -> 
     save_state(folder, state)
 
     inventory["brprocs"][short_id] = {
-        "id": proc_id,
+        "uuid": proc_id,
         "name": config["name"],
         "short_id": short_id,
         "folder": folder_name,
@@ -239,7 +300,7 @@ def create_bproc(name: str, seconds: int = 3600, lock_on_error: bool = True) -> 
 
     return {
         "short_id": short_id,
-        "id": proc_id,
+        "uuid": proc_id,
         "name": config["name"],
         "folder": folder_name,
         "folder_path": folder,
@@ -325,13 +386,54 @@ def save_bproc_code_text(short_id: str, text: str) -> dict:
     return load_bproc_record(short_id)
 
 
-def _install_drop_item(item: Path) -> dict:
+def _process_intake_root(root: Path, source_type: str) -> list[dict]:
     """
-    Install one dropped file or directory as a bproc.
+    Process one intake directory and return newly installed bprocs.
+    """
+    ensure_runtime_layout()
+    installed = []
+
+    for item in sorted(root.iterdir(), key=lambda path: path.name.lower()):
+        result = _install_intake_item(item, source_type)
+        if result is not None:
+            installed.append(result)
+
+    return installed
+
+
+def _install_intake_item(item: Path, source_type: str) -> dict | None:
+    """
+    Install one intake item, dropping duplicates with a project-wide log note.
     """
     inventory = load_inventory()
-    proc_id = str(uuid.uuid4())
-    short_id = proc_id[:12]
+    proc_id = _find_requested_proc_id(item, inventory)
+    if proc_id is not None:
+        existing_short_id = _find_existing_short_id_by_uuid(inventory, proc_id)
+        if existing_short_id is not None:
+            _log_duplicate_intake(item, source_type, proc_id, existing_short_id, inventory)
+            _delete_drop_item(item)
+            return None
+    else:
+        proc_id = _generate_unique_proc_id(inventory)
+
+    return _install_drop_item(item, source_type, proc_id, inventory)
+
+
+def _install_drop_item(
+    item: Path,
+    source_type: str = "drop",
+    proc_id: str | None = None,
+    inventory: dict | None = None,
+) -> dict:
+    """
+    Install one intake file or directory as a bproc.
+    """
+    if inventory is None:
+        inventory = load_inventory()
+    if proc_id is None:
+        proc_id = _find_requested_proc_id(item, inventory) or _generate_unique_proc_id(inventory)
+
+    short_id = _derive_short_id(inventory, proc_id)
     base_name = util.slugify_name(item.stem if item.is_file() else item.name)
     folder_name = f"{base_name}__{short_id}"
     folder = get_brprocs_root() / folder_name
@@ -352,13 +454,13 @@ def _install_drop_item(item: Path) -> dict:
     save_state(folder, state)
 
     inventory["brprocs"][short_id] = {
-        "id": proc_id,
+        "uuid": proc_id,
         "name": config["name"],
         "short_id": short_id,
         "folder": folder_name,
         "entry": "code.py",
         "installed_at": config["installed_at"],
-        "source": {"type": "drop"},
+        "source": {"type": source_type},
     }
     save_inventory(inventory)
 
@@ -366,7 +468,7 @@ def _install_drop_item(item: Path) -> dict:
 
     return {
         "short_id": short_id,
-        "id": proc_id,
+        "uuid": proc_id,
         "name": config["name"],
         "folder": folder_name,
         "folder_path": folder,
@@ -421,7 +523,7 @@ def _build_bproc_config(
     Build the base bproc.json payload, preserving any supplied metadata.
     """
     payload = {
-        "id": proc_id,
+        "uuid": proc_id,
         "short_id": short_id,
         "name": display_name,
         "folder": folder_name,
@@ -433,7 +535,7 @@ def _build_bproc_config(
     existing = util.read_json(folder / "bproc.json", {})
     if isinstance(existing, dict):
         payload = util.merge_defaults(payload, existing)
-        payload["id"] = proc_id
+        payload["uuid"] = proc_id
         payload["short_id"] = short_id
         payload["name"] = payload.get("name") or display_name
         payload["folder"] = folder_name
@@ -482,7 +584,7 @@ def _read_bproc_module_metadata(code_path: Path) -> dict:
             continue
 
         name = node.targets[0].id
-        if name not in {"name", "interval_seconds"}:
+        if name not in {"name", "interval_seconds", "uuid", "id"}:
             continue
 
         try:
@@ -494,6 +596,8 @@ def _read_bproc_module_metadata(code_path: Path) -> dict:
             found[name] = value
         if name == "interval_seconds" and isinstance(value, int):
             found[name] = value
+        if name in {"uuid", "id"} and isinstance(value, str):
+            found["uuid"] = value
 
     return found
 
@@ -503,7 +607,7 @@ def _default_state(proc_id: str) -> dict:
     Return a default runtime state object.
     """
     return {
-        "id": proc_id,
+        "uuid": proc_id,
         "enabled": True,
         "schedule": {
             "mode": "interval",
@@ -557,7 +661,7 @@ def tick(context):
 '''
 
 
-def _starter_code(display_name: str, seconds: int) -> str:
+def _starter_code(proc_id: str, display_name: str, seconds: int) -> str:
     """
     Create a starter code.py for a new manual bproc.
     """
@@ -565,6 +669,7 @@ def _starter_code(display_name: str, seconds: int) -> str:
 Battery Runner bproc: {display_name}
 """
 
+uuid = {proc_id!r}
 name = {display_name!r}
 interval_seconds = {seconds}
 
@@ -594,6 +699,98 @@ def _refresh_bproc_metadata(short_id: str) -> None:
     state = record["state"]
     if _sync_bproc_metadata(record, config, state, inventory):
         save_inventory(inventory)
+
+
+def _generate_unique_proc_id(inventory: dict) -> str:
+    """
+    Generate a UUID that does not collide with current inventory.
+    """
+    while True:
+        proc_id = str(uuid.uuid4())
+        if not _inventory_has_full_id(inventory, proc_id):
+            return proc_id
+
+
+def _find_requested_proc_id(item: Path, inventory: dict) -> str | None:
+    """
+    Read a requested UUID from a dropped bproc directory if present and usable.
+    """
+    data = None
+    code_path = None
+    if item.is_dir():
+        data = util.read_json(item / "bproc.json", None)
+        code_path = item / "code.py"
+    elif item.is_file() and item.suffix.lower() == ".py":
+        code_path = item
+    else:
+        return None
+
+    requested = None
+    if isinstance(data, dict):
+        requested = data.get("uuid")
+        if requested in [None, ""]:
+            # Compatibility shim: accept legacy "id" on import for now and recast to "uuid".
+            # Future cleanup: remove legacy "id" support once authored surfaces have migrated.
+            requested = data.get("id")
+    if requested in [None, ""] and code_path is not None:
+        requested = _read_bproc_module_metadata(code_path).get("uuid")
+    if requested in [None, ""]:
+        return None
+
+    return _normalize_requested_proc_id(requested)
+
+
+def _normalize_requested_proc_id(value) -> str:
+    """
+    Validate and normalize a requested UUID string.
+    """
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise ValueError(f"Invalid bproc UUID: {value!r}") from exc
+
+
+def _ensure_proc_id_available(inventory: dict, proc_id: str) -> None:
+    """
+    Raise if the requested UUID is already in use.
+    """
+    if _inventory_has_full_id(inventory, proc_id):
+        raise ValueError(f"Bproc UUID already exists: {proc_id}")
+
+
+def _inventory_has_full_id(inventory: dict, proc_id: str) -> bool:
+    """
+    Return True when the full UUID already exists in inventory.
+    """
+    for item in inventory["brprocs"].values():
+        if item["uuid"] == proc_id:
+            return True
+    return False
+
+
+def _find_existing_short_id_by_uuid(inventory: dict, proc_id: str) -> str | None:
+    """
+    Return the short_id for an already-known UUID, if present.
+    """
+    for short_id, item in inventory["brprocs"].items():
+        if item["uuid"] == proc_id:
+            return short_id
+    return None
+
+
+def _derive_short_id(inventory: dict, proc_id: str) -> str:
+    """
+    Derive a collision-resistant short_id from the full UUID.
+    """
+    digest = uuid.uuid5(uuid.NAMESPACE_URL, proc_id).hex
+
+    for length in range(12, len(digest) + 1):
+        short_id = digest[:length]
+        existing = inventory["brprocs"].get(short_id)
+        if existing is None or existing["uuid"] == proc_id:
+            return short_id
+
+    raise ValueError(f"Could not derive unique short_id for UUID: {proc_id}")
 
 
 def _sync_bproc_metadata(record: dict, config: dict, state: dict, inventory: dict) -> bool:
@@ -627,6 +824,46 @@ def _sync_bproc_metadata(record: dict, config: dict, state: dict, inventory: dic
         save_state(folder, state)
 
     return True
+
+
+def _normalize_legacy_uuid_fields(data: dict) -> None:
+    """
+    Recast legacy "id" fields to "uuid" on read for compatibility.
+    """
+    if not isinstance(data, dict):
+        return
+
+    # Compatibility shim: accept legacy "id" on import for now and recast to "uuid".
+    # Future cleanup: remove legacy "id" support once authored surfaces have migrated.
+    if "uuid" not in data and "id" in data:
+        data["uuid"] = data["id"]
+
+
+def _log_duplicate_intake(
+    item: Path,
+    source_type: str,
+    proc_id: str,
+    existing_short_id: str,
+    inventory: dict,
+) -> None:
+    """
+    Write a project-wide note explaining that a duplicate intake item was dropped.
+    """
+    existing = inventory["brprocs"][existing_short_id]
+    util.append_jsonl(
+        get_project_log_path(),
+        {
+            "timestamp": util.now_epoch(),
+            "action": "drop_duplicate_intake",
+            "why": "duplicate uuid",
+            "source": source_type,
+            "incoming_name": item.name,
+            "incoming_path": str(item),
+            "uuid": proc_id,
+            "existing_short_id": existing_short_id,
+            "existing_folder": existing["folder"],
+        },
+    )
 
 
 def _delete_drop_item(item: Path) -> None:

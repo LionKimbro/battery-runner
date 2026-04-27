@@ -43,10 +43,10 @@ def cmd_ui() -> None:
 
 def cmd_scan() -> None:
     """
-    Install dropped bprocs and print a short summary.
+    Install intake bprocs and print a short summary.
     """
     storage.ensure_runtime_layout()
-    installed = storage.process_drop()
+    installed = storage.process_intake()
 
     payload = {
         "installed": len(installed),

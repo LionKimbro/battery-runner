@@ -17,12 +17,15 @@ There is no second required function, no class requirement, and no registration 
 
 ## Optional Top-Level Metadata
 
-Battery Runner currently looks for these optional top-level assignments in `code.py` when the bproc is installed:
+Battery Runner currently looks for these optional top-level assignments in `code.py`:
 
 ```python
+uuid = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 name = "Some Friendly Name"
 interval_seconds = 300
 ```
+
+Battery Runner accepts legacy `id = "..."` on import for compatibility, but `uuid` is the preferred authored name going forward.
 
 ### `name`
 
@@ -112,7 +115,7 @@ Current top-level shape:
 
 ```python
 {
-    "id": str,
+    "uuid": str,
     "enabled": bool,
     "schedule": dict,
     "lock_on_error": bool,
@@ -123,7 +126,7 @@ Current top-level shape:
 
 ### `context["state"]` Top-Level Keys
 
-- `id`
+- `uuid`
   Type: `str`
   The full UUID string for this bproc.
 
