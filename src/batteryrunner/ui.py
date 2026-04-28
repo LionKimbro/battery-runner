@@ -40,30 +40,43 @@ COLUMN_SPECS = [
 ]
 
 
-BPROC_CODE_HELP_TEXT = """context["now"] -- int -- seconds since epoch
-context["log"] -- fn(msg) -- post a log message to stdout and log.jsonl
-context["state"] -- {"uuid": str, "enabled": bool, "schedule": dict, "lock_on_error": bool, "runtime": dict, "config": dict}
-context["state"]["uuid"] -- str -- full UUID string for the bproc
-context["state"]["enabled"] -- bool -- whether the bproc is enabled
-context["state"]["schedule"] -- {"mode": str, "seconds": int, "label": str}
-context["state"]["schedule"]["mode"] -- str -- current schedule mode, presently "interval"
-context["state"]["schedule"]["seconds"] -- int -- run interval in seconds
-context["state"]["schedule"]["label"] -- str -- UI label for the schedule
-context["state"]["lock_on_error"] -- bool -- if false, an error disables the bproc
-context["state"]["runtime"] -- {"running": bool, "last_run": int|None, "next_run": int|None, "last_success": int|None, "last_error": dict, "error_count": int}
-context["state"]["runtime"]["running"] -- bool -- whether the bproc is currently marked running
-context["state"]["runtime"]["last_run"] -- int|None -- epoch seconds of the last attempted run
-context["state"]["runtime"]["next_run"] -- int|None -- epoch seconds of the next scheduled run
-context["state"]["runtime"]["last_success"] -- int|None -- epoch seconds of the last successful run
-context["state"]["runtime"]["last_error"] -- {"timestamp": int|None, "message": str|None, "traceback": str|None}
-context["state"]["runtime"]["error_count"] -- int -- number of recorded failures
-context["config"] -- dict -- short-cut to context["state"]["config"]
-context["root_path"] -- pathlib.Path -- path to .batteryrunner/
-context["bproc_path"] -- pathlib.Path -- path to this bproc's installed folder
+BPROC_CODE_HELP_TEXT = """from batteryrunner import bproc_context as ctx
 
 Required function:
-def tick(context):
+def tick():
     pass
+
+Primary context helpers:
+ctx.get_now() -- int -- seconds since epoch
+ctx.log(msg) -- fn(msg) -- post a log message to stdout and log.jsonl
+ctx.get_state() -- {"uuid": str, "enabled": bool, "schedule": dict, "lock_on_error": bool, "runtime": dict, "config": dict}
+ctx.get_config() -- dict -- short-cut to ctx.get_state()["config"]
+ctx.get_runtime() -- {"running": bool, "last_run": int|None, "next_run": int|None, "last_success": int|None, "last_error": dict, "error_count": int}
+ctx.get_schedule() -- {"mode": str, "seconds": int, "label": str}
+ctx.get_uuid() -- str -- full UUID string for the bproc
+ctx.get_name() -- str -- display name for the bproc
+ctx.get_root_path() -- pathlib.Path -- path to .batteryrunner/
+ctx.get_bproc_path() -- pathlib.Path -- path to this bproc's installed folder
+
+State details:
+ctx.get_state()["uuid"] -- str -- full UUID string for the bproc
+ctx.get_state()["enabled"] -- bool -- whether the bproc is enabled
+ctx.get_state()["schedule"] -- {"mode": str, "seconds": int, "label": str}
+ctx.get_state()["schedule"]["mode"] -- str -- current schedule mode, presently "interval"
+ctx.get_state()["schedule"]["seconds"] -- int -- run interval in seconds
+ctx.get_state()["schedule"]["label"] -- str -- UI label for the schedule
+ctx.get_state()["lock_on_error"] -- bool -- if false, an error disables the bproc
+ctx.get_state()["runtime"] -- {"running": bool, "last_run": int|None, "next_run": int|None, "last_success": int|None, "last_error": dict, "error_count": int}
+ctx.get_state()["runtime"]["running"] -- bool -- whether the bproc is currently marked running
+ctx.get_state()["runtime"]["last_run"] -- int|None -- epoch seconds of the last attempted run
+ctx.get_state()["runtime"]["next_run"] -- int|None -- epoch seconds of the next scheduled run
+ctx.get_state()["runtime"]["last_success"] -- int|None -- epoch seconds of the last successful run
+ctx.get_state()["runtime"]["last_error"] -- {"timestamp": int|None, "message": str|None, "traceback": str|None}
+ctx.get_state()["runtime"]["error_count"] -- int -- number of recorded failures
+
+JSON helpers:
+ctx.load_json(path) -- object -- resolves relative paths from the bproc folder and reports malformed JSON with path, line, and column
+ctx.save_json(path, obj) -- None -- writes JSON relative to the bproc folder
 
 Optional top-level metadata:
 uuid = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
@@ -77,7 +90,7 @@ def launch_ui() -> None:
     Start the Tkinter UI.
     """
     storage.ensure_runtime_layout()
-    storage.process_drop()
+    storage.process_intake()
 
     root = tk.Tk()
     root.title("Battery Runner")

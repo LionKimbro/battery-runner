@@ -8,7 +8,7 @@ import importlib.util
 import sys
 import traceback
 
-from batteryrunner import storage, util
+from batteryrunner import bproc_context, storage, util
 
 
 g = {
@@ -67,10 +67,11 @@ def run_bproc_now(short_id: str) -> dict:
     try:
         module = load_bproc_module(record)
         if not hasattr(module, "tick"):
-            raise AttributeError("code.py must define tick(context)")
+            raise AttributeError("code.py must define tick()")
 
-        context = build_context(record, now)
-        module.tick(context)
+        bproc_context.reset({})
+        bproc_context.reset(build_context_payload(record, now))
+        module.tick()
         runtime["last_success"] = now
         runtime["last_error"] = {
             "timestamp": None,
@@ -87,6 +88,7 @@ def run_bproc_now(short_id: str) -> dict:
         if not state["lock_on_error"]:
             state["enabled"] = False
     finally:
+        bproc_context.reset({})
         runtime["running"] = False
         runtime["next_run"] = _compute_next_run(
             state["schedule"]["seconds"],
@@ -98,21 +100,21 @@ def run_bproc_now(short_id: str) -> dict:
     return record
 
 
-def build_context(record: dict, now: int) -> dict:
+def build_context_payload(record: dict, now: int) -> dict:
     """
-    Build the runtime context passed to tick(context).
+    Build the runtime payload loaded into bproc_context.
     """
     state = record["state"]
-    config = state["config"]
     folder = record["folder_path"]
 
     return {
         "now": now,
         "log": lambda message: log_bproc_message(record, message),
         "state": state,
-        "config": config,
+        "record": record,
         "root_path": storage.get_runtime_root(),
         "bproc_path": folder,
+        "log_fn": lambda message: log_bproc_message(record, message),
     }
 
 
@@ -126,6 +128,8 @@ def log_bproc_message(record: dict, message) -> None:
         storage.get_bproc_log_path(record["folder_path"]),
         {
             "timestamp": util.now_epoch(),
+            "bproc_uuid": record["uuid"],
+            "bproc_name": record["name"],
             "message": text,
         },
     )

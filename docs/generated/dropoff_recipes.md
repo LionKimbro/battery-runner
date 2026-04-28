@@ -20,12 +20,14 @@ hello_report.py
 Example:
 
 ```python
+from batteryrunner import bproc_context as ctx
+
 name = "Hello Report"
 interval_seconds = 60
 
 
-def tick(context):
-    context["log"]("hello from Battery Runner")
+def tick():
+    ctx.log("hello from Battery Runner")
 ```
 
 What happens:
@@ -52,19 +54,21 @@ message_bot/
 Example `code.py`:
 
 ```python
+from batteryrunner import bproc_context as ctx
+
 name = "Message Bot"
 interval_seconds = 300
 
 import json
 
 
-def tick(context):
-    bproc_path = context["bproc_path"]
+def tick():
+    bproc_path = ctx.get_bproc_path()
     template = (bproc_path / "template.txt").read_text(encoding="utf-8").strip()
     names = json.loads((bproc_path / "names.json").read_text(encoding="utf-8"))
-    line = template.format(name=names[0], now=context["now"])
+    line = template.format(name=names[0], now=ctx.get_now())
     (bproc_path / "message.txt").write_text(line + "\n", encoding="utf-8")
-    context["log"]("message.txt updated")
+    ctx.log("message.txt updated")
 ```
 
 Best use:
@@ -131,7 +135,7 @@ Example `bproc.json`:
 }
 ```
 
-Battery Runner currently normalizes important fields like ID, short ID, folder, and installation timestamp, so this is best used for descriptive metadata rather than fixed identity.
+Battery Runner currently normalizes important fields like UUID, short ID, folder, and installation timestamp, so this is best used for descriptive metadata rather than fixed identity.
 
 ## Recipe 5: Starter Bundle For Editing In The UI
 
@@ -152,12 +156,14 @@ draft_worker/
 Example `code.py`:
 
 ```python
+from batteryrunner import bproc_context as ctx
+
 name = "Draft Worker"
 interval_seconds = 300
 
 
-def tick(context):
-    context["log"]("draft worker tick")
+def tick():
+    ctx.log("draft worker tick")
 ```
 
 This pattern is useful when the drop-off is really a seed package rather than a finished bproc.

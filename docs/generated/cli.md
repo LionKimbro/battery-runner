@@ -34,7 +34,7 @@ Use this when you want to be explicit.
 
 ## `battery-runner scan`
 
-Scans `.batteryrunner/drop/`, installs any new dropped bprocs, and prints a JSON summary.
+Scans `.batteryrunner/drop/` and `.batteryrunner/inbox/`, installs any new intake bprocs, and prints a JSON summary.
 
 Example output shape:
 
@@ -57,7 +57,7 @@ Runs one scheduler pass without opening the UI.
 
 This does two things:
 
-- processes the drop folder
+- processes the active intake folders
 - runs every installed bproc that is currently due
 
 It then prints a JSON summary of what ran.
@@ -107,7 +107,7 @@ F:\some\other\project\.batteryrunner\
 
 The CLI and UI operate on the same runtime files.
 
-- `scan` installs drop-offs
+- `scan` installs items from `drop/` and `inbox/`
 - `tick` advances the scheduler
 - `list` shows current state
 - `ui` opens the graphical control surface

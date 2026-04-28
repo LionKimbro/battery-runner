@@ -655,9 +655,11 @@ def _default_code(base_name: str) -> str:
 Battery Runner starter bproc for {base_name}.
 """
 
+from batteryrunner import bproc_context as ctx
 
-def tick(context):
-    context["log"]("tick")
+
+def tick():
+    ctx.log("tick")
 '''
 
 
@@ -669,12 +671,14 @@ def _starter_code(proc_id: str, display_name: str, seconds: int) -> str:
 Battery Runner bproc: {display_name}
 """
 
+from batteryrunner import bproc_context as ctx
+
 uuid = {proc_id!r}
 name = {display_name!r}
 interval_seconds = {seconds}
 
 
-def tick(context):
+def tick():
     pass
 '''
 

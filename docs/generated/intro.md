@@ -2,7 +2,7 @@
 
 Battery Runner is a small local host for Python behavior processes, or "bprocs."
 
-A bproc is just a folder with some files in it, especially a `code.py` file that defines a `tick(context)` function. Battery Runner installs these bprocs from a drop folder, keeps their state on disk, schedules them, and gives you a Tkinter UI to turn them on and off, edit them, run them immediately, and inspect errors.
+A bproc is just a folder with some files in it, especially a `code.py` file that defines a nullary `tick()` function and imports `batteryrunner.bproc_context`. Battery Runner installs these bprocs from a drop folder, keeps their state on disk, schedules them, and gives you a Tkinter UI to turn them on and off, edit them, run them immediately, and inspect errors.
 
 For the full docs index, see [index.md](./index.md).
 
@@ -17,7 +17,7 @@ Battery Runner currently provides:
 - a scheduler that runs enabled bprocs when they are due
 - a Tkinter UI for managing bprocs
 - a CLI for scanning, ticking, listing, and opening the UI
-- reserved `inbox/` and `outbox/` directories for future message-oriented use
+- an active `inbox/` intake directory and a reserved `outbox/` directory
 
 Battery Runner does not currently do Patchboard routing, Silk Road courier behavior, or distributed coordination. It only reserves space for those ideas.
 
@@ -28,7 +28,7 @@ The system is simple:
 1. Put a Python file or folder into `.batteryrunner/drop/`.
 2. Battery Runner installs it as a new bproc under `.batteryrunner/brprocs/`.
 3. The installed bproc gets its own folder, ID, state file, and config file.
-4. Battery Runner calls `tick(context)` whenever the bproc is due.
+4. Battery Runner resets `batteryrunner.bproc_context` and calls `tick()` whenever the bproc is due.
 5. Errors are captured into the bproc's state instead of crashing the host.
 
 ## Main Runtime Folders
@@ -57,11 +57,14 @@ The CLI is documented in [cli.md](./cli.md).
 The only required code entrypoint is:
 
 ```python
-def tick(context):
+from batteryrunner import bproc_context as ctx
+
+
+def tick():
     ...
 ```
 
-Battery Runner passes in a context dictionary containing the current time, logging function, bproc state/config, and important paths. The coding surface for bprocs is documented in [bproc_code.md](./bproc_code.md).
+Battery Runner provides current time, logging, state/config, and path access through the shared `bproc_context` module. The coding surface for bprocs is documented in [bproc_code.md](./bproc_code.md).
 
 ## Where To Go Next
 

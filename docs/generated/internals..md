@@ -59,7 +59,7 @@ Current shape:
       "short_id": "abc123def456",
       "folder": "message_reporter__abc123def456",
       "entry": "code.py",
-      "installed_at": "2026-04-18T20:00:00+00:00",
+      "installed_at": 1776542400,
       "source": {
         "type": "drop"
       }
@@ -83,7 +83,7 @@ Important fields:
   A collision-resistant short identifier derived from the full UUID and used for inventory keys and folder suffixes.
 
 - `source.type`
-  Currently always `"drop"` in this implementation.
+  Indicates where the bproc came from, such as `"drop"`, `"inbox"`, or `"manual"`.
 
 ## `drop/`
 
@@ -98,20 +98,24 @@ Accepted practical forms include:
 - a folder containing `code.py`, `state.json`, `bproc.json`, and support files
 - a non-Python file or folder, in which case Battery Runner will still install it but may generate a starter `code.py` if needed
 
-## `inbox/` and `outbox/`
+## `inbox/`
 
-These directories are created and reserved for future use.
+This is also an intake area for new bprocs.
 
-Battery Runner does not currently implement routing, Patchboard handling, or other message transport behavior in them.
+Battery Runner scans this directory along with `drop/`.
 
-They are present as designated runtime surfaces only.
+## `outbox/`
+
+This directory is created and reserved for future use.
+
+Battery Runner does not currently implement routing, Patchboard handling, or other message transport behavior in it.
 
 ## System-Wide Behavior
 
 The system currently works like this:
 
 1. ensure runtime layout exists
-2. process `drop/`
+2. process `drop/` and `inbox/`
 3. keep installed bprocs indexed in `brprocs-inventory.json`
 4. run due bprocs by reading their individual `state.json` files
 5. update runtime fields after each run
@@ -120,7 +124,7 @@ The system currently works like this:
 
 The scheduler pass currently:
 
-- processes the drop folder first
+- processes the active intake folders first
 - loads the inventory
 - loads each bproc state
 - skips disabled bprocs
@@ -145,8 +149,8 @@ This keeps the system human-legible and filesystem-driven.
 
 The CLI commands operate on the same files:
 
-- `scan` processes `drop/`
-- `tick` processes `drop/` and runs due bprocs
+- `scan` processes `drop/` and `inbox/`
+- `tick` processes `drop/` and `inbox/`, then runs due bprocs
 - `list` reports current state
 - default command / `ui` opens the Tk UI
 

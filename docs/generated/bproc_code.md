@@ -1,19 +1,20 @@
 # Bproc Code
 
-Battery Runner runs Python bprocs by importing an installed `code.py` file and calling its `tick(context)` function.
+Battery Runner runs Python bprocs by importing an installed `code.py` file, resetting the shared `batteryrunner.bproc_context` module for that run, and then calling a nullary `tick()` function.
 
-## Required Function
+## Required Shape
 
-The required entrypoint is:
+The preferred authored pattern is:
 
 ```python
-def tick(context):
+from batteryrunner import bproc_context as ctx
+
+
+def tick():
     ...
 ```
 
-Battery Runner expects the module to define `tick`. If `tick` is missing, the run fails and the error is recorded in the bproc state.
-
-There is no second required function, no class requirement, and no registration API.
+Battery Runner expects the module to define `tick`. There is no class requirement, no registration API, and no positional `context` argument.
 
 ## Optional Top-Level Metadata
 
@@ -31,13 +32,13 @@ Battery Runner accepts legacy `id = "..."` on import for compatibility, but `uui
 
 If present, `name` is used as the display name for the bproc.
 
-Battery Runner now rescans this dynamically when `code.py` changes, so editing the file can update the displayed bproc name without reinstalling the bproc.
+Battery Runner rescans this dynamically when `code.py` changes, so editing the file can update the displayed bproc name without reinstalling the bproc.
 
 ### `interval_seconds`
 
 If present, `interval_seconds` is used as the bproc interval schedule.
 
-Battery Runner now rescans this dynamically when `code.py` changes. If the value changes, Battery Runner updates:
+Battery Runner rescans this dynamically when `code.py` changes. If the value changes, Battery Runner updates:
 
 - `state["schedule"]["seconds"]`
 - `state["schedule"]["label"]`
@@ -45,71 +46,76 @@ Battery Runner now rescans this dynamically when `code.py` changes. If the value
 
 The new `next_run` is recalculated from `last_run` using the new interval.
 
-## The `context` Passed To `tick`
+## The `bproc_context` Module
 
-Battery Runner passes a plain dictionary into `tick(context)`.
+Import it like this:
 
-Current keys are:
+```python
+from batteryrunner import bproc_context as ctx
+```
 
-- `context["now"]`
-- `context["log"]`
-- `context["state"]`
-- `context["config"]`
-- `context["root_path"]`
-- `context["bproc_path"]`
+Battery Runner resets this module before each run, loads the current bproc's data into it, and clears it again after the run.
 
-## `context["now"]`
+Current API:
 
-`context["now"]` is the current timestamp as an integer number of seconds since the Unix epoch.
+- `ctx.get_now()`
+- `ctx.get_uuid()`
+- `ctx.get_name()`
+- `ctx.get_state()`
+- `ctx.get_config()`
+- `ctx.get_runtime()`
+- `ctx.get_schedule()`
+- `ctx.get_root_path()`
+- `ctx.get_bproc_path()`
+- `ctx.log(message)`
+- `ctx.resolve_path(path)`
+- `ctx.load_json(path)`
+- `ctx.save_json(path, obj)`
+
+## `ctx.get_now()`
+
+Returns the current timestamp as an integer number of seconds since the Unix epoch.
 
 Example:
 
 ```python
-def tick(context):
-    print(context["now"])
+from batteryrunner import bproc_context as ctx
+
+
+def tick():
+    print(ctx.get_now())
 ```
 
-## `context["log"]`
+## `ctx.log(message)`
 
-`context["log"]` is a callable you can use like this:
+`ctx.log(message)` posts a log message to stdout and to the bproc's `log.jsonl`.
+
+Example:
 
 ```python
-def tick(context):
-    context["log"]("starting work")
+from batteryrunner import bproc_context as ctx
+
+
+def tick():
+    ctx.log("starting work")
 ```
 
-Battery Runner currently implements it as a simple stdout logger. A call like:
+Current `log.jsonl` entry shape:
 
-```python
-context["log"]("starting work")
+```json
+{
+  "timestamp": 1777357063,
+  "bproc_uuid": "e6741066-2bb9-4adf-ab0c-8723cbe786c0",
+  "bproc_name": "sign-maker",
+  "message": "starting work"
+}
 ```
 
-produces something like:
+`bproc_uuid` is the authoritative identity. `bproc_name` is included as a convenient projection for humans reading the file.
 
-```text
-[abc123def456] starting work
-```
+## `ctx.get_state()`
 
-Use `context["log"]` for progress notes, status messages, and simple diagnostics that should show up in the host output.
-
-Battery Runner also appends each log call to the bproc's `log.jsonl` file as a JSON object with:
-
-- `timestamp`
-- `message`
-
-## `context["state"]`
-
-`context["state"]` is the full persisted state object for the bproc.
-
-It includes:
-
-- enable/disable state
-- schedule info
-- lock-on-error behavior
-- runtime tracking such as last run and last error
-- the `config` object
-
-In practice, bproc code should usually treat this as readable state, not as a direct persistence API. Battery Runner currently persists state before and after runs, but it does not provide a special transactional write API for mutating arbitrary nested values during `tick`.
+Returns the full persisted state object for the bproc.
 
 Current top-level shape:
 
@@ -124,7 +130,7 @@ Current top-level shape:
 }
 ```
 
-### `context["state"]` Top-Level Keys
+### `ctx.get_state()` Top-Level Keys
 
 - `uuid`
   Type: `str`
@@ -150,7 +156,13 @@ Current top-level shape:
   Type: `dict`
   User-editable configuration object for the bproc.
 
-### `context["state"]["schedule"]`
+## `ctx.get_schedule()`
+
+This is the same object as:
+
+```python
+ctx.get_state()["schedule"]
+```
 
 Current keys:
 
@@ -166,7 +178,13 @@ Current keys:
   Type: `str`
   A human-facing schedule label used in the UI, such as `"5 min"` or `"1 hour"`.
 
-### `context["state"]["runtime"]`
+## `ctx.get_runtime()`
+
+This is the same object as:
+
+```python
+ctx.get_state()["runtime"]
+```
 
 Current keys:
 
@@ -194,7 +212,7 @@ Current keys:
   Type: `int`
   Count of how many failures have been recorded for this bproc.
 
-### `context["state"]["runtime"]["last_error"]`
+### `ctx.get_runtime()["last_error"]`
 
 Current keys:
 
@@ -210,90 +228,133 @@ Current keys:
   Type: `str | None`
   The stored traceback text from the most recent error, or `None`.
 
-## `context["config"]`
+## `ctx.get_config()`
 
-`context["config"]` is just:
+This is just:
 
 ```python
-context["state"]["config"]
+ctx.get_state()["config"]
 ```
 
 It is provided as a convenience.
 
-This is the main place for user-editable bproc configuration. The UI's `Conf` button edits this object as JSON.
-
 Example:
 
 ```python
-def tick(context):
-    city = context["config"].get("city", "Portland")
-    context["log"](f"city={city}")
+from batteryrunner import bproc_context as ctx
+
+
+def tick():
+    city = ctx.get_config().get("city", "Portland")
+    ctx.log(f"city={city}")
 ```
 
-## `context["root_path"]`
+## `ctx.get_root_path()`
 
-`context["root_path"]` is a `pathlib.Path`.
-
-It points to the Battery Runner runtime root, usually:
+Returns a `pathlib.Path` pointing to the Battery Runner runtime root, usually:
 
 ```text
 .batteryrunner/
 ```
 
-You can use it to reach shared runtime areas like `inbox/` or `outbox/`, though Battery Runner itself does not currently implement message routing behavior there.
+## `ctx.get_bproc_path()`
 
-## `context["bproc_path"]`
-
-`context["bproc_path"]` is a `pathlib.Path`.
-
-It is the installed folder for the current bproc.
+Returns a `pathlib.Path` pointing to the installed folder for the current bproc.
 
 This is the main place to read bproc-local files or write bproc-local outputs.
 
 Example:
 
 ```python
-def tick(context):
-    path = context["bproc_path"] / "data.txt"
+from batteryrunner import bproc_context as ctx
+
+
+def tick():
+    path = ctx.get_bproc_path() / "data.txt"
     if path.exists():
-        text = path.read_text(encoding="utf-8")
-        context["log"](text.strip())
+        ctx.log(path.read_text(encoding="utf-8").strip())
+```
+
+## `ctx.resolve_path(path)`
+
+Returns a `pathlib.Path`.
+
+If the incoming path is absolute, it is returned as-is. If it is relative, it is resolved from the current bproc folder.
+
+## `ctx.load_json(path)`
+
+Loads JSON from either an absolute path or a path relative to the bproc folder.
+
+When JSON is malformed, Battery Runner raises a standardized `JsonLoadError` that includes:
+
+- the resolved path
+- the decoder's line number
+- the decoder's column number
+- the decode error message
+
+Example error shape:
+
+```text
+JSON decode error in F:\...\settings.json at line 12, column 7: Expecting ',' delimiter
+```
+
+Example:
+
+```python
+from batteryrunner import bproc_context as ctx
+
+
+def tick():
+    settings = ctx.load_json("settings.json")
+    ctx.log(f"loaded {settings!r}")
+```
+
+## `ctx.save_json(path, obj)`
+
+Saves JSON to either an absolute path or a path relative to the bproc folder.
+
+Battery Runner writes UTF-8 JSON with a trailing newline.
+
+Example:
+
+```python
+from batteryrunner import bproc_context as ctx
+
+
+def tick():
+    payload = {"now": ctx.get_now()}
+    ctx.save_json("latest.json", payload)
+    ctx.log("latest.json updated")
 ```
 
 ## Minimal Example
 
 ```python
-def tick(context):
-    context["log"]("tick")
+from batteryrunner import bproc_context as ctx
+
+
+def tick():
+    ctx.log("tick")
 ```
 
 ## Slightly Richer Example
 
 ```python
+from batteryrunner import bproc_context as ctx
+
 name = "Counter"
 interval_seconds = 60
 
 
-def tick(context):
-    config = context["config"]
+def tick():
+    config = ctx.get_config()
     value = config.get("value", 0)
-    context["log"](f"value={value}")
+    ctx.log(f"value={value}")
 ```
-
-## Support Files
-
-Your `code.py` can make use of other files in the bproc folder. For example:
-
-- templates
-- JSON data files
-- prompt files
-- small local caches
-
-Battery Runner will copy these files during installation if they were in the dropped folder.
 
 ## Error Behavior
 
-If `tick(context)` raises an exception:
+If `tick()` raises an exception:
 
 - the traceback is captured
 - the error message is stored in runtime state

@@ -36,10 +36,10 @@ Examples of support files:
 
 This is the runnable Python module for the bproc.
 
-Battery Runner imports this file dynamically and calls:
+Battery Runner imports this file dynamically, resets `batteryrunner.bproc_context`, and calls:
 
 ```python
-tick(context)
+tick()
 ```
 
 For the code contract, see [bproc_code.md](./bproc_code.md).
@@ -132,12 +132,17 @@ Battery Runner currently preserves a dropped `bproc.json` if one was supplied, t
 
 ## `log.jsonl`
 
-This is the per-bproc append-only log file written by `context["log"]`.
+This is the per-bproc append-only log file written by `ctx.log(...)`.
 
 Each line is one JSON object. Current shape:
 
 ```json
-{"timestamp":1776542400,"message":"starting work"}
+{
+  "timestamp": 1776542400,
+  "bproc_uuid": "e6741066-2bb9-4adf-ab0c-8723cbe786c0",
+  "bproc_name": "Message Reporter",
+  "message": "starting work"
+}
 ```
 
 Battery Runner writes this file inside the bproc folder, so logs stay local to the bproc that produced them.

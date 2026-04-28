@@ -6,24 +6,27 @@ This guide is about writing bprocs that are easy to understand, easy to operate,
 
 For the raw code contract, see [bproc_code.md](./bproc_code.md). For concrete packaged examples, see [dropoff_recipes.md](./dropoff_recipes.md).
 
-## Start With A Small `tick(context)`
+## Start With A Small `tick()`
 
-Try to keep `tick(context)` short and readable.
+Try to keep `tick()` short and readable.
 
 Good:
 
 ```python
-def tick(context):
-    data = load_data(context)
+from batteryrunner import bproc_context as ctx
+
+
+def tick():
+    data = load_data()
     result = build_report(data)
-    write_report(context, result)
-    context["log"]("report written")
+    write_report(result)
+    ctx.log("report written")
 ```
 
 Less good:
 
 ```python
-def tick(context):
+def tick():
     # 150 lines of mixed file I/O, parsing, business logic, and output
     ...
 ```
@@ -44,28 +47,31 @@ Good examples:
 
 This makes it easy to change behavior through the UI's `Conf` editor without rewriting code.
 
-## Use `bproc_path` For Local Files
+## Use `ctx.get_bproc_path()` For Local Files
 
 If the bproc has support files, keep them in the bproc folder and access them through:
 
 ```python
-context["bproc_path"]
+ctx.get_bproc_path()
 ```
 
 Example:
 
 ```python
-def tick(context):
-    prompt_path = context["bproc_path"] / "prompt.txt"
+from batteryrunner import bproc_context as ctx
+
+
+def tick():
+    prompt_path = ctx.get_bproc_path() / "prompt.txt"
     prompt = prompt_path.read_text(encoding="utf-8")
-    context["log"](f"loaded {prompt_path.name}")
+    ctx.log(f"loaded {prompt_path.name}")
 ```
 
 This keeps the bproc self-contained.
 
 ## Log Useful Things, Not Everything
 
-`context["log"]` is best used for high-value status messages:
+`ctx.log(...)` is best used for high-value status messages:
 
 - what the bproc decided to do
 - what file it wrote
@@ -75,8 +81,8 @@ This keeps the bproc self-contained.
 Good:
 
 ```python
-context["log"]("no input files found; skipping")
-context["log"](f"wrote {output_path.name}")
+ctx.log("no input files found; skipping")
+ctx.log(f"wrote {output_path.name}")
 ```
 
 Less good:
@@ -99,8 +105,11 @@ Try to make repeated runs harmless:
 Good example:
 
 ```python
-def tick(context):
-    out_path = context["bproc_path"] / "latest.txt"
+from batteryrunner import bproc_context as ctx
+
+
+def tick():
+    out_path = ctx.get_bproc_path() / "latest.txt"
     out_path.write_text("fresh result\n", encoding="utf-8")
 ```
 
@@ -113,8 +122,11 @@ That means it is okay to raise real exceptions when something is wrong. Prefer f
 Good:
 
 ```python
-def tick(context):
-    template_path = context["bproc_path"] / "template.txt"
+from batteryrunner import bproc_context as ctx
+
+
+def tick():
+    template_path = ctx.get_bproc_path() / "template.txt"
     if not template_path.exists():
         raise FileNotFoundError(f"Missing template: {template_path.name}")
 ```
@@ -132,7 +144,7 @@ Prefer:
 
 - reading local files from its own folder
 - writing outputs into its own folder
-- using `root_path` only when the broader runtime actually matters
+- using `ctx.get_root_path()` only when the broader runtime actually matters
 
 Be cautious about:
 
@@ -158,25 +170,27 @@ Battery Runner also rescans these values when `code.py` changes, so they are not
 ## A Good Basic Template
 
 ```python
+from batteryrunner import bproc_context as ctx
+
 name = "Useful Example"
 interval_seconds = 300
 
 
-def tick(context):
-    config = context["config"]
-    bproc_path = context["bproc_path"]
+def tick():
+    config = ctx.get_config()
+    bproc_path = ctx.get_bproc_path()
 
     input_path = bproc_path / "input.txt"
     output_path = bproc_path / "output.txt"
 
     if not input_path.exists():
-        context["log"]("input.txt missing; skipping")
+        ctx.log("input.txt missing; skipping")
         return
 
     text = input_path.read_text(encoding="utf-8")
     prefix = config.get("prefix", "processed")
     output_path.write_text(f"{prefix}: {text}", encoding="utf-8")
-    context["log"](f"wrote {output_path.name}")
+    ctx.log(f"wrote {output_path.name}")
 ```
 
 ## Keep The Mental Model Simple

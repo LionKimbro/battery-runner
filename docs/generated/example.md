@@ -6,7 +6,7 @@ This article walks through a somewhat richer example than "hello world." It show
 - reads a template file from its own folder
 - reads configuration from `state.json`
 - writes a small report file into its own folder
-- logs what it did through `context["log"]`
+- logs what it did through `ctx.log(...)`
 
 Along the way, it touches the main Battery Runner systems:
 
@@ -33,23 +33,25 @@ message_reporter/
 ## `code.py`
 
 ```python
+from batteryrunner import bproc_context as ctx
+
 name = "Message Reporter"
 interval_seconds = 300
 
 
-def tick(context):
-    config = context["config"]
-    bproc_path = context["bproc_path"]
+def tick():
+    config = ctx.get_config()
+    bproc_path = ctx.get_bproc_path()
 
     template_path = bproc_path / "template.txt"
     report_path = bproc_path / "last-report.txt"
 
     template = template_path.read_text(encoding="utf-8").strip()
     subject = config.get("subject", "world")
-    line = template.format(subject=subject, now=context["now"])
+    line = template.format(subject=subject, now=ctx.get_now())
 
     report_path.write_text(line + "\n", encoding="utf-8")
-    context["log"](f"wrote {report_path.name} for subject={subject!r}")
+    ctx.log(f"wrote {report_path.name} for subject={subject!r}")
 ```
 
 ## `state.json`
@@ -96,17 +98,17 @@ This example relies on several parts of the runtime:
 - `interval_seconds = 300`
   Battery Runner reads this from `code.py` and will rescan it if `code.py` changes, updating the schedule accordingly.
 
-- `context["config"]`
+- `ctx.get_config()`
   This comes from `state.json`, specifically from the `config` object.
 
-- `context["bproc_path"]`
+- `ctx.get_bproc_path()`
   This is the installed folder for the bproc. The example uses it to read `template.txt` and write `last-report.txt`.
 
-- `context["now"]`
+- `ctx.get_now()`
   This is the current timestamp as epoch seconds for the current run.
 
-- `context["log"]`
-  This writes a line to Battery Runner's stdout in the form `[short_id] message`.
+- `ctx.log(...)`
+  This writes a line to Battery Runner's stdout in the form `[short_id] message` and appends the entry to the bproc's `log.jsonl`.
 
 These runtime details are documented in [bproc_code.md](./bproc_code.md).
 
@@ -118,7 +120,7 @@ This example sets:
 "lock_on_error": false
 ```
 
-That means if `tick(context)` raises an exception, Battery Runner will:
+That means if `tick()` raises an exception, Battery Runner will:
 
 - store the error message and traceback in runtime state
 - increment `error_count`

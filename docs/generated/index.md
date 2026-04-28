@@ -18,7 +18,7 @@ If you are new to the project, start here:
   A more realistic example bproc, including how it uses Battery Runner systems.
 
 - [bproc_code.md](./bproc_code.md)
-  The `tick(context)` contract, the contents of `context`, logging, and optional metadata.
+  The `tick()` contract, the `bproc_context` module, logging, JSON helpers, and optional metadata.
 
 - [cli.md](./cli.md)
   The current CLI commands and how they relate to the runtime.
