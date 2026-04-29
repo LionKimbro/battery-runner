@@ -51,6 +51,7 @@ ctx.get_now() -- int -- seconds since epoch
 ctx.log(msg) -- fn(msg) -- post a log message to stdout and log.jsonl
 ctx.get_state() -- {"uuid": str, "enabled": bool, "schedule": dict, "lock_on_error": bool, "runtime": dict, "config": dict}
 ctx.get_config() -- dict -- short-cut to ctx.get_state()["config"]
+ctx.get_shared() -- dict -- shared in-memory dictionary visible to all bprocs until Battery Runner exits
 ctx.get_runtime() -- {"running": bool, "last_run": int|None, "next_run": int|None, "last_success": int|None, "last_error": dict, "error_count": int}
 ctx.get_schedule() -- {"mode": str, "seconds": int, "label": str}
 ctx.get_uuid() -- str -- full UUID string for the bproc
@@ -77,6 +78,11 @@ ctx.get_state()["runtime"]["error_count"] -- int -- number of recorded failures
 JSON helpers:
 ctx.load_json(path) -- object -- resolves relative paths from the bproc folder and reports malformed JSON with path, line, and column
 ctx.save_json(path, obj) -- None -- writes JSON relative to the bproc folder
+
+Context lifecycle:
+ctx.reset(d) -- replace the active per-run payload while preserving shared memory
+ctx.clear() -- clear the active per-run payload while preserving shared memory
+ctx.clear(reset_shared=True) -- also clear shared memory
 
 Optional top-level metadata:
 uuid = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"

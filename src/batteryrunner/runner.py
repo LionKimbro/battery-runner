@@ -69,7 +69,7 @@ def run_bproc_now(short_id: str) -> dict:
         if not hasattr(module, "tick"):
             raise AttributeError("code.py must define tick()")
 
-        bproc_context.reset({})
+        bproc_context.clear()
         bproc_context.reset(build_context_payload(record, now))
         module.tick()
         runtime["last_success"] = now
@@ -88,7 +88,7 @@ def run_bproc_now(short_id: str) -> dict:
         if not state["lock_on_error"]:
             state["enabled"] = False
     finally:
-        bproc_context.reset({})
+        bproc_context.clear()
         runtime["running"] = False
         runtime["next_run"] = _compute_next_run(
             state["schedule"]["seconds"],

@@ -56,6 +56,8 @@ from batteryrunner import bproc_context as ctx
 
 Battery Runner resets this module before each run, loads the current bproc's data into it, and clears it again after the run.
 
+One part of the module is intentionally not cleared between bproc runs: shared in-memory state returned by `ctx.get_shared()`. That shared dictionary lives for as long as the Battery Runner process stays alive, and it is reset only when Battery Runner exits, dies, or when code explicitly calls `ctx.clear(reset_shared=True)`.
+
 Current API:
 
 - `ctx.get_now()`
@@ -63,6 +65,7 @@ Current API:
 - `ctx.get_name()`
 - `ctx.get_state()`
 - `ctx.get_config()`
+- `ctx.get_shared()`
 - `ctx.get_runtime()`
 - `ctx.get_schedule()`
 - `ctx.get_root_path()`
@@ -71,6 +74,8 @@ Current API:
 - `ctx.resolve_path(path)`
 - `ctx.load_json(path)`
 - `ctx.save_json(path, obj)`
+- `ctx.reset(d)`
+- `ctx.clear(reset_shared=False)`
 
 ## `ctx.get_now()`
 
@@ -249,6 +254,29 @@ def tick():
     ctx.log(f"city={city}")
 ```
 
+## `ctx.get_shared()`
+
+Returns a plain dictionary shared across all bprocs in the current Battery Runner process.
+
+This is process-memory only:
+
+- it is not written to disk
+- it is not cleared between bproc runs
+- it is reset when Battery Runner exits or crashes
+- it can also be cleared explicitly with `ctx.clear(reset_shared=True)`
+
+Example:
+
+```python
+from batteryrunner import bproc_context as ctx
+
+
+def tick():
+    shared = ctx.get_shared()
+    shared["run_count"] = shared.get("run_count", 0) + 1
+    ctx.log(f"shared run_count={shared['run_count']}")
+```
+
 ## `ctx.get_root_path()`
 
 Returns a `pathlib.Path` pointing to the Battery Runner runtime root, usually:
@@ -326,6 +354,16 @@ def tick():
     ctx.save_json("latest.json", payload)
     ctx.log("latest.json updated")
 ```
+
+## `ctx.reset(d)` and `ctx.clear(...)`
+
+Battery Runner itself uses these lifecycle helpers around each run.
+
+- `ctx.reset(d)` replaces the active per-run payload and preserves shared memory
+- `ctx.clear()` clears the active per-run payload and preserves shared memory
+- `ctx.clear(reset_shared=True)` clears both the per-run payload and the shared dictionary
+
+Ordinary bproc code will usually use the getter functions instead of calling these directly.
 
 ## Minimal Example
 

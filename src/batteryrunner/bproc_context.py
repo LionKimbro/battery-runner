@@ -10,7 +10,9 @@ from pathlib import Path
 from batteryrunner import util
 
 
-g = {}
+g = {
+    "shared": {},
+}
 
 
 class JsonLoadError(RuntimeError):
@@ -23,8 +25,19 @@ def reset(d: dict) -> None:
     """
     Replace the active bproc context payload.
     """
+    shared = g.get("shared", {})
     g.clear()
+    g["shared"] = shared
     g.update(d)
+
+
+def clear(reset_shared: bool = False) -> None:
+    """
+    Clear the active per-run payload, preserving shared memory by default.
+    """
+    shared = {} if reset_shared else g.get("shared", {})
+    g.clear()
+    g["shared"] = shared
 
 
 def get_now() -> int:
@@ -88,6 +101,13 @@ def get_bproc_path() -> Path:
     Return the installed folder for the current bproc.
     """
     return g["bproc_path"]
+
+
+def get_shared() -> dict:
+    """
+    Return the shared in-memory dictionary visible to all bprocs.
+    """
+    return g["shared"]
 
 
 def log(message) -> None:
