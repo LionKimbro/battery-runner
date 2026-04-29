@@ -667,7 +667,6 @@ def _open_create_bproc_dialog() -> None:
     """
     top = tk.Toplevel(g["root"])
     top.title("Create Bproc")
-    top.geometry("380x220")
     top.resizable(False, False)
     top.grid_columnconfigure(1, weight=1)
 
@@ -715,6 +714,8 @@ def _open_create_bproc_dialog() -> None:
 
     name_entry.focus_set()
     name_entry.selection_range(0, "end")
+    top.update_idletasks()
+    top.minsize(420, top.winfo_reqheight())
 
 
 def _open_text_editor(title: str, initial_text: str, on_save, help_text: str | None = None) -> None:
