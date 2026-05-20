@@ -10,3 +10,6 @@ date: 2026-04-18
   Digital Silk Road Concept -- https://chatgpt.com/c/69e2bb47-82f0-83e8-b08c-8989e5513a72
 * Battery Runner Architecture -- https://chatgpt.com/c/69e3d521-08f8-83e8-9110-4f9f04edd1b3
 
+2026-05-20
+  We need a simpler language for operations -- https://chatgpt.com/c/6a0ca2e2-df90-83e8-84b0-5e9b598a66b9
+
