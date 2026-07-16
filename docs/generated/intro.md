@@ -31,6 +31,32 @@ The system is simple:
 4. Battery Runner resets `batteryrunner.bproc_context` and calls `tick()` whenever the bproc is due.
 5. Errors are captured into the bproc's state instead of crashing the host.
 
+A bproc has three kinds of memory:
+
+1. Durable managed state
+   state.json
+   Battery Runner loads and saves this.
+
+2. Durable private files
+   Any files in the bproc folder.
+   The bproc reads and writes these itself.
+
+3. Temporary process memory
+   ctx.get_shared()
+   Survives between ticks only while Battery Runner remains running.
+
+Source file:
+    installation defaults
+
+settings.json:
+    current user-controlled settings
+
+runtime.json:
+    Battery Runner-controlled execution state
+
+data.json:
+    bproc-controlled durable state
+
 ## Main Runtime Folders
 
 Inside `.batteryrunner/` you will see:
@@ -41,7 +67,7 @@ Inside `.batteryrunner/` you will see:
 - `inbox/`
 - `outbox/`
 
-The broad runtime structure is documented in [internals..md](./internals..md). The structure of an individual installed bproc is documented in [internals_bproc.md](./internals_bproc.md).
+The broad runtime structure is documented in [internals.md](./internals.md). The structure of an individual installed bproc is documented in [internals_bproc.md](./internals_bproc.md).
 
 ## How You Work With It
 
