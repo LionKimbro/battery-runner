@@ -1,0 +1,970 @@
+# Goal: Rebuild Battery Runner Around a Clear, Headless, Persistence-First Architecture
+
+Remake Battery Runner into a small, understandable local host for scheduled Python behaviors called **bprocs**.
+
+The existing project already has useful pieces: bproc installation, scheduling, persistent state, logging, a CLI, and a Tkinter management interface. Preserve good working code where practical, but do not preserve confusing architecture merely for compatibility.
+
+The rebuilt project should optimize for this experience:
+
+> Write one small Python file, drop it into Battery Runner, and immediately have a scheduled, persistent, inspectable behavior whose entire lifecycle is easy to understand.
+
+The system must be understandable to someone returning to the project after months away.
+
+---
+
+# 1. Core Product Model
+
+A **bproc** is a small Python behavior managed by Battery Runner.
+
+The smallest useful bproc is one `.py` file:
+
+```python
+from batteryrunner import bproc_context as ctx
+
+bproc_defaults = {
+    "name": "Message Reporter",
+    "interval_seconds": 300,
+}
+
+
+def tick():
+    ctx.log("Hello from Message Reporter.")
+```
+
+A user should be able to place this directly into:
+
+```text
+.batteryrunner/drop/
+```
+
+Battery Runner should install it automatically.
+
+A folder may also be dropped when the bproc needs companion files:
+
+```text
+message_reporter/
+  code.py
+  template.txt
+  prompts/
+```
+
+The rule should be:
+
+* Drop a single `.py` file for a small self-contained bproc.
+* Drop a folder when the bproc requires supporting files.
+* Both forms produce the same installed bproc structure.
+
+Single-file bprocs should be the primary documented path.
+
+---
+
+# 2. Clarify Configuration Authority
+
+Replace the current top-level metadata convention:
+
+```python
+name = "Message Reporter"
+interval_seconds = 300
+```
+
+with:
+
+```python
+bproc_defaults = {
+    "name": "Message Reporter",
+    "interval_seconds": 300,
+}
+```
+
+`bproc_defaults` contains **installation defaults only**.
+
+It is not a continuously authoritative declaration.
+
+The lifecycle rule must be explicit:
+
+1. Battery Runner reads `bproc_defaults` when the bproc is first installed.
+2. It uses those values to create the installed settings.
+3. After installation, the installed settings file is authoritative.
+4. Editing `bproc_defaults` does not silently overwrite settings for an already-installed bproc.
+5. Applying changed defaults to an installed bproc must require an explicit operation such as:
+
+   * reset settings to source defaults,
+   * re-import defaults,
+   * or reinstall the bproc.
+
+Avoid any hidden competition between source-code metadata and persisted settings.
+
+Legacy support for top-level `name` and `interval_seconds` may be retained temporarily if easy, but it should be clearly marked as compatibility behavior and converted into installation defaults. It must not continue dynamically rewriting installed settings.
+
+---
+
+# 3. Establish a Clear Persistence Model
+
+The current system makes it difficult to know:
+
+* what is stored on disk,
+* what is stored only in memory,
+* what survives restart,
+* who owns each value,
+* and which API should be used for durable bproc data.
+
+Rebuild the persistence model around explicit ownership boundaries.
+
+An installed bproc should look approximately like this:
+
+```text
+.batteryrunner/
+  brprocs/
+    message_reporter__abc123/
+      code.py
+      settings.json
+      data.json
+      runtime.json
+      log.jsonl
+      ...supporting files...
+```
+
+The exact names may be adjusted only if there is a strong implementation reason, but the conceptual separation must remain.
+
+## `settings.json`
+
+Persistent and user-controlled.
+
+Contains values such as:
+
+```json
+{
+  "name": "Message Reporter",
+  "enabled": true,
+  "lock_on_error": false,
+  "schedule": {
+    "mode": "interval",
+    "seconds": 300,
+    "label": "5 min"
+  },
+  "config": {
+    "subject": "battery runner"
+  }
+}
+```
+
+Battery Runner and its UI may edit this file in response to explicit user actions.
+
+The source code must not silently overwrite it during ordinary scans or runs.
+
+## `data.json`
+
+Persistent and bproc-controlled.
+
+This is the standard durable storage area for application data owned by the bproc.
+
+Provide context helpers such as:
+
+```python
+ctx.get_data()
+ctx.save_data()
+```
+
+or another similarly clear API.
+
+The intended lifecycle should be obvious:
+
+```python
+def tick():
+    data = ctx.get_data()
+    data["count"] = data.get("count", 0) + 1
+    ctx.save_data()
+```
+
+It is acceptable for `get_data()` to return a mutable object, but persistence behavior must be explicit and documented. Do not create ambiguity over whether mutation alone saves the object.
+
+## `runtime.json`
+
+Persistent and Battery Runner-controlled.
+
+Contains scheduler and execution bookkeeping such as:
+
+```json
+{
+  "running": false,
+  "last_run": null,
+  "next_run": null,
+  "last_success": null,
+  "last_error": {
+    "timestamp": null,
+    "message": null,
+    "traceback": null
+  },
+  "error_count": 0
+}
+```
+
+Bproc code may inspect runtime information, but should not normally mutate it.
+
+## Bproc-local files
+
+All other files inside the installed bproc folder are durable unless explicitly temporary.
+
+Bprocs may read and write them using paths based on:
+
+```python
+ctx.get_bproc_path()
+```
+
+## Process memory
+
+Battery Runner may provide process-lifetime shared memory, but it must be explicitly identified as temporary:
+
+```python
+ctx.get_shared()
+```
+
+Document it as:
+
+* not written to disk,
+* shared across bprocs in the current runner process,
+* lost when that process exits or crashes,
+* unsuitable for required durable state.
+
+Consider renaming it to something even clearer, such as:
+
+```python
+ctx.get_process_memory()
+```
+
+If the existing name is retained, the documentation and UI must make its lifetime unmistakable.
+
+## Active run context
+
+The context describing the currently executing bproc exists only for the duration of one invocation.
+
+It should be reset before a run and cleared afterward.
+
+This is implementation state, not bproc persistence.
+
+---
+
+# 4. Separate the Core, Runner, CLI, and UI
+
+Tkinter must not be the required host environment for continuous execution.
+
+The system should be layered approximately as follows:
+
+```text
+Battery Runner Core
+  installation
+  persistence
+  schedule calculations
+  execution
+  logging
+  runtime-state updates
+
+Headless Runner
+  continuously performs scheduler passes
+  does not import or depend on Tkinter
+
+CLI
+  invokes core operations
+  can run one-shot or continuous headless commands
+
+Tkinter UI
+  observes and controls the runtime
+  is not required for execution
+  does not own the scheduler architecture
+```
+
+The core and headless execution layers must not depend on Tkinter.
+
+The UI may use periodic polling or another simple mechanism to refresh itself from runtime state.
+
+Avoid unnecessary IPC infrastructure unless the existing design truly requires it. This is a local single-user tool. Prefer clear files, explicit locking, and simple processes.
+
+---
+
+# 5. Required CLI Shape
+
+Preserve useful existing commands where appropriate, but evolve the CLI toward the following model:
+
+```text
+battery-runner
+battery-runner ui
+battery-runner scan
+battery-runner tick
+battery-runner serve
+battery-runner list
+battery-runner run <id-or-name>
+```
+
+## `battery-runner`
+
+May continue to open the UI by default.
+
+## `battery-runner ui`
+
+Opens the Tkinter management UI.
+
+Opening the UI must not be required to run scheduled bprocs continuously.
+
+## `battery-runner scan`
+
+Processes new `.py` files and folders from intake locations.
+
+It should report what was installed and any failures.
+
+## `battery-runner tick`
+
+Runs one scheduler pass:
+
+1. process intake,
+2. determine which bprocs are due,
+3. run those bprocs,
+4. persist runtime results,
+5. exit.
+
+This should work well with Windows Task Scheduler, cron, or manual invocation.
+
+## `battery-runner serve`
+
+Runs continuously without a graphical interface.
+
+It should:
+
+1. process intake periodically,
+2. run due bprocs,
+3. sleep efficiently between scheduler passes,
+4. respond cleanly to normal termination,
+5. write useful logs,
+6. avoid importing Tkinter.
+
+## `battery-runner list`
+
+Displays installed bprocs and important status fields.
+
+Human-readable output is preferred by default, with an option for JSON if the existing CLI conventions make that natural.
+
+At minimum show:
+
+* short ID,
+* name,
+* enabled state,
+* schedule,
+* last run,
+* next run,
+* last result or error.
+
+## `battery-runner run <id-or-name>`
+
+Runs one named bproc immediately, regardless of whether it is currently due.
+
+Resolve exact IDs first and names second.
+
+If name matching is ambiguous, report the candidates rather than choosing silently.
+
+---
+
+# 6. Intake and Installation
+
+Support both of these:
+
+```text
+.batteryrunner/drop/hello.py
+```
+
+and:
+
+```text
+.batteryrunner/drop/message_reporter/
+  code.py
+  template.txt
+```
+
+A single-file drop should be installed into a normal bproc folder:
+
+```text
+.batteryrunner/brprocs/
+  hello__abc123/
+    code.py
+    settings.json
+    data.json
+    runtime.json
+    log.jsonl
+```
+
+Installation should:
+
+1. validate the dropped source,
+2. load `bproc_defaults`,
+3. assign a UUID and short ID,
+4. derive a safe folder name,
+5. create the installed folder,
+6. copy the source and supporting files,
+7. create normalized settings, data, runtime, and log files,
+8. update the inventory atomically,
+9. remove or archive the intake item only after successful installation.
+
+Do not partially install broken bprocs.
+
+Prefer staging into a temporary folder and renaming into place after the installation is complete.
+
+Malformed source, invalid defaults, duplicate identities, bad JSON, or filesystem errors must produce understandable messages.
+
+---
+
+# 7. Bproc Code Contract
+
+The preferred code shape is:
+
+```python
+from batteryrunner import bproc_context as ctx
+
+bproc_defaults = {
+    "name": "Example",
+    "interval_seconds": 300,
+}
+
+
+def tick():
+    ...
+```
+
+Required:
+
+* a nullary `tick()` function.
+
+Optional:
+
+* `bproc_defaults`,
+* a UUID only when intentionally supplied for migration or identity preservation.
+
+There should be:
+
+* no class requirement,
+* no registration API,
+* no positional context argument,
+* no required framework boilerplate.
+
+Validate `bproc_defaults` carefully.
+
+At minimum support:
+
+```python
+bproc_defaults = {
+    "name": str,
+    "interval_seconds": int,
+    "enabled": bool,
+    "lock_on_error": bool,
+    "config": dict,
+}
+```
+
+Decide whether nested schedule syntax should also be accepted:
+
+```python
+bproc_defaults = {
+    "name": "Example",
+    "schedule": {
+        "mode": "interval",
+        "seconds": 300,
+    },
+}
+```
+
+Prefer one canonical authored format in the documentation. Supporting both is acceptable only if normalization is simple and well tested.
+
+---
+
+# 8. Bproc Context API
+
+Review the existing context API and reshape it around the new persistence model.
+
+Likely useful API:
+
+```python
+ctx.get_now()
+ctx.get_uuid()
+ctx.get_name()
+
+ctx.get_settings()
+ctx.get_config()
+
+ctx.get_data()
+ctx.save_data()
+
+ctx.get_runtime()
+
+ctx.get_root_path()
+ctx.get_bproc_path()
+
+ctx.get_process_memory()
+
+ctx.log(message)
+
+ctx.resolve_path(path)
+ctx.load_json(path)
+ctx.save_json(path, obj)
+```
+
+Compatibility aliases may be retained temporarily where useful.
+
+Ownership must be clear:
+
+* settings: durable, user-controlled,
+* config: durable subsection of settings,
+* data: durable, bproc-controlled,
+* runtime: durable, runner-controlled,
+* process memory: temporary,
+* local files: durable and bproc-controlled.
+
+Do not expose internal lifecycle functions such as `reset()` and `clear()` as prominent ordinary bproc APIs. They may remain internal or clearly marked as internal.
+
+---
+
+# 9. Execution Isolation
+
+First inspect how the current implementation executes bprocs.
+
+At minimum, prevent one ordinary bproc exception from crashing Battery Runner.
+
+Strongly consider running each bproc invocation in a child process rather than importing arbitrary bproc code directly into the long-running runner process.
+
+The desired properties are:
+
+* an exception is contained,
+* a bproc cannot pollute another bproc’s imported module globals,
+* a hung bproc can eventually be timed out,
+* a hard exit affects the child invocation rather than the host,
+* stdout and stderr can be captured,
+* runtime results can be reported back clearly.
+
+However, do not introduce an elaborate distributed system.
+
+A simple subprocess or multiprocessing execution boundary is sufficient.
+
+If child-process execution would require a disproportionately large rewrite, implement the architectural boundaries so that execution can be swapped later, document the remaining limitation prominently, and create a clear follow-up issue or design note.
+
+If process-lifetime shared memory across bprocs is retained, note that true process isolation changes its meaning. Choose one of these explicitly:
+
+1. remove cross-bproc shared memory,
+2. make it runner-managed and accessed through explicit IPC,
+3. retain in-process execution temporarily,
+4. redefine it as per-worker-process memory.
+
+Do not preserve contradictory semantics accidentally.
+
+---
+
+# 10. Error Semantics
+
+Review the meaning and naming of `lock_on_error`.
+
+The currently documented behavior is counterintuitive:
+
+* `lock_on_error = false` disables the bproc after an error,
+* `lock_on_error = true` leaves it enabled.
+
+Choose a clearer name if practical, such as:
+
+```text
+disable_on_error
+```
+
+or:
+
+```text
+continue_after_error
+```
+
+Prefer positive and unsurprising semantics.
+
+If backward compatibility is retained, normalize the old field into the new one during migration and document the conversion.
+
+On failure, store:
+
+* timestamp,
+* exception message,
+* traceback,
+* exit status where relevant,
+* captured stderr where relevant,
+* error count.
+
+The UI and CLI should make the most recent failure easy to inspect.
+
+---
+
+# 11. Concurrency and File Safety
+
+The UI, `tick`, `serve`, and other commands may all access the same runtime files.
+
+Define and implement a simple concurrency policy.
+
+At minimum:
+
+* prevent two scheduler passes from running the same bproc simultaneously unless explicitly supported,
+* prevent inventory corruption,
+* write JSON atomically,
+* avoid reading partially written files,
+* use clear lock files or another simple local locking mechanism,
+* recover gracefully from stale locks where possible.
+
+Do not overengineer multi-user or distributed coordination.
+
+This is a local execution host.
+
+---
+
+# 12. Red-Carpet User Experience
+
+The rebuilt project should provide an unusually clear re-entry experience.
+
+A person returning after months away should be able to answer immediately:
+
+* What is a bproc?
+* How do I make one?
+* What files are durable?
+* What is held only in memory?
+* Who owns each file?
+* How do settings work?
+* When will it run?
+* What happened last time?
+* How do I run it now?
+* How do I stop it?
+* Where are its logs?
+* Where are its private files?
+
+## UI requirements
+
+The Tkinter UI should make each selected bproc legible as a complete living object.
+
+Show approximately:
+
+```text
+Name
+UUID / short ID
+Installed folder
+Enabled / disabled
+Running / idle
+Schedule
+Next run
+Last run
+Last success
+Last error
+```
+
+Clearly separate visual sections for:
+
+```text
+SOURCE
+  code.py
+  source defaults
+
+SETTINGS
+  persistent
+  user-controlled
+
+DATA
+  persistent
+  bproc-controlled
+
+RUNTIME
+  persistent
+  Battery Runner-controlled
+
+PROCESS MEMORY
+  temporary
+  lost when the runner exits
+
+FILES
+  durable bproc-local files
+
+LOG
+  recent entries
+```
+
+Useful actions:
+
+```text
+Run Now
+Enable / Disable
+Open Folder
+Open Source
+Edit Settings
+View Data
+View Runtime
+View Full Log
+Reset Settings from Source Defaults
+```
+
+Do not expose dangerous internal mutations casually.
+
+## New-bproc experience
+
+Add a clear way to create a bproc.
+
+A basic creation form might ask:
+
+```text
+Name
+Run every
+Template
+Destination
+```
+
+Possible templates:
+
+```text
+Empty bproc
+Log a message
+Persistent counter
+Read and write JSON
+Watch a folder
+Run a command
+```
+
+The generated result should be a tiny ordinary `.py` file using `bproc_defaults`.
+
+Do not build a complex visual programming environment. The purpose is to provide a smooth entrance into writing simple bproc code.
+
+---
+
+# 13. Documentation
+
+Rewrite the documentation around the new architecture.
+
+The docs must not begin with internal folder implementation details.
+
+Create a clear reading path.
+
+## README
+
+The README should show:
+
+1. what Battery Runner is,
+2. the five-line minimal bproc,
+3. where to drop it,
+4. how to start the headless runner,
+5. how to open the UI,
+6. what survives restart.
+
+## Quickstart
+
+Provide a complete ten-minute path:
+
+1. install Battery Runner,
+2. initialize or choose an execution root,
+3. drop `hello.py`,
+4. run `battery-runner scan`,
+5. inspect it with `battery-runner list`,
+6. run it with `battery-runner run`,
+7. start `battery-runner serve`,
+8. open the UI,
+9. find its log and files.
+
+## Persistence Guide
+
+Include a table similar to:
+
+| Facility       | Stored where       | Survives restart | Owner           |
+| -------------- | ------------------ | ---------------: | --------------- |
+| Settings       | `settings.json`    |              Yes | User / UI       |
+| Config         | `settings.json`    |              Yes | User / UI       |
+| Data           | `data.json`        |              Yes | Bproc           |
+| Runtime        | `runtime.json`     |              Yes | Battery Runner  |
+| Local files    | Bproc folder       |              Yes | Bproc           |
+| Process memory | RAM                |               No | Bprocs / runner |
+| Active context | RAM during one run |               No | Battery Runner  |
+
+## Authoring Guide
+
+Explain:
+
+* minimal `.py` bprocs,
+* folder bprocs,
+* `bproc_defaults`,
+* `tick()`,
+* config,
+* durable data,
+* files,
+* logging,
+* error handling.
+
+## Architecture Guide
+
+Explain the separation between:
+
+* core,
+* headless runner,
+* CLI,
+* UI,
+* bproc execution boundary.
+
+## Migration Guide
+
+Explain how existing bprocs using:
+
+```python
+name = ...
+interval_seconds = ...
+```
+
+and the old combined `state.json` layout are migrated.
+
+---
+
+# 14. Migration
+
+Inspect the current on-disk format before changing it.
+
+Implement a migration path rather than simply breaking existing installed bprocs.
+
+The likely old format combines fields such as:
+
+```text
+uuid
+enabled
+schedule
+lock_on_error
+runtime
+config
+```
+
+inside `state.json`.
+
+Migrate these into the new files:
+
+```text
+settings.json
+runtime.json
+data.json
+```
+
+Preserve:
+
+* UUID,
+* short ID,
+* display name,
+* enabled state,
+* schedule,
+* config,
+* last-run information,
+* errors,
+* logs,
+* supporting files.
+
+Create backups before destructive migration.
+
+Migration should be:
+
+* explicit,
+* idempotent where possible,
+* logged,
+* testable,
+* safe to rerun after interruption.
+
+Do not silently discard unknown state keys. Preserve them in a migration record or place them into a clearly documented compatibility section.
+
+---
+
+# 15. Testing
+
+Add or update tests for at least:
+
+* installing a single `.py` bproc,
+* installing a folder bproc,
+* reading `bproc_defaults`,
+* ensuring defaults are used only at installation,
+* preventing source edits from silently overwriting installed settings,
+* settings persistence,
+* bproc data persistence,
+* runtime persistence,
+* process-memory non-persistence,
+* scheduler due-time calculations,
+* manual run,
+* headless `serve`,
+* exception capture,
+* error-disable semantics,
+* atomic JSON writes,
+* duplicate execution prevention,
+* migration from the old state layout,
+* malformed defaults,
+* malformed JSON,
+* partial installation failure,
+* CLI output,
+* core modules importing without Tkinter.
+
+Add an integration test proving that scheduled execution can operate without opening or importing the Tkinter UI.
+
+---
+
+# 16. Implementation Approach
+
+Before changing code:
+
+1. Inspect the entire repository.
+2. Identify current modules and responsibilities.
+3. Identify which existing behaviors are tested.
+4. Map the current on-disk format.
+5. Identify the current scheduler ownership.
+6. Identify whether the UI directly owns continuous execution.
+7. Identify how bproc modules are imported and cached.
+8. Identify all compatibility constraints.
+
+Then write a concise implementation plan in the repository before beginning the main rewrite.
+
+Prefer incremental working stages:
+
+1. persistence model,
+2. migration,
+3. intake of single `.py` files,
+4. defaults authority,
+5. core/UI separation,
+6. headless service,
+7. execution isolation,
+8. UI red-carpet improvements,
+9. documentation,
+10. cleanup and compatibility removal.
+
+Keep the project runnable and tested between stages.
+
+---
+
+# 17. Design Principles
+
+Use these principles to resolve ambiguity:
+
+* Explicit ownership over magical synchronization.
+* Installation defaults over continuously authoritative source metadata.
+* One-file simplicity as the golden path.
+* Folders only when supporting files are actually needed.
+* Durable state must be visibly durable.
+* Temporary memory must be visibly temporary.
+* Tkinter is a control surface, not the execution engine.
+* The CLI and UI are clients of the same core.
+* A bproc failure must not destroy the host.
+* Local simplicity over distributed-system machinery.
+* Re-entry after months away is a primary use case.
+* Preserve working behavior when it supports the new model.
+* Remove compatibility behavior when it obscures the model more than it helps.
+
+---
+
+# 18. Completion Criteria
+
+The remake is complete when all of the following are true:
+
+1. I can create `hello.py` with `bproc_defaults` and `tick()`.
+2. I can drop it directly into `.batteryrunner/drop/`.
+3. Battery Runner installs it into a normal managed folder.
+4. I can tell immediately which information is in settings, data, runtime, files, or temporary memory.
+5. Editing the source defaults does not silently overwrite installed settings.
+6. `battery-runner tick` works without Tkinter.
+7. `battery-runner serve` runs continuously without Tkinter.
+8. `battery-runner ui` is an optional management surface.
+9. I can manually run one bproc from the CLI and UI.
+10. The UI shows the bproc’s source, settings, data, runtime, files, memory lifetime, logs, and schedule clearly.
+11. Existing installed bprocs can be migrated without losing identity, settings, runtime history, config, logs, or files.
+12. The documentation gives a red-carpet path from zero to a running bproc.
+13. A person returning after several months can understand the system without reconstructing its architecture from scattered files.
+
+The intended result is not merely a scheduler.
+
+It should feel like a **small, warm, inspectable habitat for local Python behaviors**.

@@ -63,30 +63,53 @@ def get_name() -> str:
 
 def get_state() -> dict:
     """
-    Return the current bproc state object.
+    Return the transitional compatibility state object.
     """
     return g["state"]
 
 
+def get_settings() -> dict:
+    """
+    Return durable user-controlled settings.
+    """
+    return g["settings"]
+
+
 def get_config() -> dict:
     """
-    Return the current bproc config object.
+    Return the durable user-controlled bproc config object.
     """
-    return g["state"]["config"]
+    return g["settings"]["config"]
+
+
+def get_data() -> dict:
+    """
+    Return durable bproc-controlled data for this bproc.
+
+    Mutating the returned dictionary does not save by itself; call save_data().
+    """
+    return g["data"]
+
+
+def save_data() -> None:
+    """
+    Persist the current bproc-controlled data dictionary.
+    """
+    g["save_data_fn"](g["data"])
 
 
 def get_runtime() -> dict:
     """
-    Return the runtime section of state.
+    Return the runner-controlled runtime dictionary.
     """
-    return g["state"]["runtime"]
+    return g["runtime"]
 
 
 def get_schedule() -> dict:
     """
     Return the schedule section of state.
     """
-    return g["state"]["schedule"]
+    return g["settings"]["schedule"]
 
 
 def get_root_path() -> Path:
@@ -103,11 +126,18 @@ def get_bproc_path() -> Path:
     return g["bproc_path"]
 
 
-def get_shared() -> dict:
+def get_process_memory() -> dict:
     """
-    Return the shared in-memory dictionary visible to all bprocs.
+    Return temporary process memory visible until this runner process exits.
     """
     return g["shared"]
+
+
+def get_shared() -> dict:
+    """
+    Compatibility alias for get_process_memory().
+    """
+    return get_process_memory()
 
 
 def log(message) -> None:

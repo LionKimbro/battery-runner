@@ -35,10 +35,10 @@ def should_run_record(record: dict) -> bool:
     """
     Decide whether a bproc should execute now.
     """
-    state = record["state"]
-    runtime = state["runtime"]
+    settings = record["settings"]
+    runtime = record["runtime"]
 
-    if not state["enabled"]:
+    if not settings["enabled"]:
         return False
 
     if runtime["running"]:
@@ -56,13 +56,13 @@ def run_bproc_now(short_id: str) -> dict:
     Run one bproc immediately.
     """
     record = storage.load_bproc_record(short_id)
-    state = record["state"]
-    runtime = state["runtime"]
+    settings = record["settings"]
+    runtime = record["runtime"]
     now = util.now_epoch()
 
     runtime["running"] = True
     runtime["last_run"] = now
-    storage.save_state(record["folder_path"], state)
+    storage.save_runtime(record["folder_path"], runtime)
 
     try:
         module = load_bproc_module(record)
@@ -85,18 +85,22 @@ def run_bproc_now(short_id: str) -> dict:
             "traceback": traceback.format_exc(),
         }
         runtime["error_count"] += 1
-        if not state["lock_on_error"]:
-            state["enabled"] = False
+        if settings["disable_on_error"]:
+            settings["enabled"] = False
+            storage.save_settings(record["folder_path"], settings)
     finally:
         bproc_context.clear()
         runtime["running"] = False
         runtime["next_run"] = _compute_next_run(
-            state["schedule"]["seconds"],
+            settings["schedule"]["seconds"],
             runtime["last_run"],
         )
-        storage.save_state(record["folder_path"], state)
+        storage.save_runtime(record["folder_path"], runtime)
+        record["state"] = storage.compose_compat_state(settings, runtime)
+        util.atomic_write_json(record["folder_path"] / "state.json", record["state"])
 
-    record["state"] = state
+    record["settings"] = settings
+    record["runtime"] = runtime
     return record
 
 
@@ -104,16 +108,19 @@ def build_context_payload(record: dict, now: int) -> dict:
     """
     Build the runtime payload loaded into bproc_context.
     """
-    state = record["state"]
     folder = record["folder_path"]
 
     return {
         "now": now,
         "log": lambda message: log_bproc_message(record, message),
-        "state": state,
+        "settings": record["settings"],
+        "data": record["data"],
+        "runtime": record["runtime"],
+        "state": record["state"],
         "record": record,
         "root_path": storage.get_runtime_root(),
         "bproc_path": folder,
+        "save_data_fn": lambda data: storage.save_data(folder, data),
         "log_fn": lambda message: log_bproc_message(record, message),
     }
 

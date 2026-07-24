@@ -82,6 +82,27 @@ def get_bproc_log_path(folder: Path) -> Path:
     return folder / "log.jsonl"
 
 
+def get_settings_path(folder: Path) -> Path:
+    """
+    Return the durable user-controlled settings path for a bproc.
+    """
+    return folder / "settings.json"
+
+
+def get_data_path(folder: Path) -> Path:
+    """
+    Return the durable bproc-controlled data path for a bproc.
+    """
+    return folder / "data.json"
+
+
+def get_runtime_path(folder: Path) -> Path:
+    """
+    Return the durable runner-controlled runtime path for a bproc.
+    """
+    return folder / "runtime.json"
+
+
 def clear_bproc_log(folder: Path) -> None:
     """
     Clear a bproc's log.jsonl file.
@@ -117,20 +138,34 @@ def list_bproc_entries() -> list[dict]:
 
     for short_id, item in inventory["brprocs"].items():
         folder = get_brprocs_root() / item["folder"]
-        state = load_state(folder)
+        settings = load_settings(folder)
+        if not settings["name"]:
+            settings["name"] = item["name"]
+        data = load_data(folder)
+        runtime = load_runtime(folder)
+        state = compose_compat_state(settings, runtime)
         config = load_config(folder)
         entry = dict(item)
         entry["short_id"] = short_id
         entry["folder_path"] = folder
+        entry["settings"] = settings
+        entry["data"] = data
+        entry["runtime"] = runtime
         entry["state"] = state
         changed = _sync_bproc_metadata(entry, config, state, inventory)
         if changed:
             inventory_changed = True
-            state = load_state(folder)
+            settings = load_settings(folder)
+            data = load_data(folder)
+            runtime = load_runtime(folder)
+            state = compose_compat_state(settings, runtime)
             config = load_config(folder)
             entry = dict(inventory["brprocs"][short_id])
             entry["short_id"] = short_id
             entry["folder_path"] = folder
+            entry["settings"] = settings
+            entry["data"] = data
+            entry["runtime"] = runtime
             entry["state"] = state
         entries.append(entry)
 
@@ -151,12 +186,20 @@ def load_bproc_record(short_id: str) -> dict:
         raise KeyError(f"Unknown bproc short id: {short_id}")
 
     folder = get_brprocs_root() / item["folder"]
-    state = load_state(folder)
+    settings = load_settings(folder)
+    if not settings["name"]:
+        settings["name"] = item["name"]
+    data = load_data(folder)
+    runtime = load_runtime(folder)
+    state = compose_compat_state(settings, runtime)
     config = load_config(folder)
     record = {
         "short_id": short_id,
         **item,
         "folder_path": folder,
+        "settings": settings,
+        "data": data,
+        "runtime": runtime,
         "state": state,
     }
     if _sync_bproc_metadata(record, config, state, inventory):
@@ -166,10 +209,32 @@ def load_bproc_record(short_id: str) -> dict:
             "short_id": short_id,
             **item,
             "folder_path": folder,
-            "state": load_state(folder),
+            "settings": load_settings(folder),
+            "data": load_data(folder),
+            "runtime": load_runtime(folder),
         }
+        record["state"] = compose_compat_state(record["settings"], record["runtime"])
 
     return record
+
+
+def resolve_bproc(target: str) -> dict:
+    """
+    Resolve an exact short id or exact display name into a bproc record.
+    """
+    entries = list_bproc_entries()
+    for entry in entries:
+        if entry["short_id"] == target:
+            return entry
+
+    matches = [entry for entry in entries if entry["name"] == target]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        names = ", ".join(item["short_id"] for item in matches)
+        raise ValueError(f"Ambiguous bproc name {target!r}; candidates: {names}")
+
+    raise KeyError(f"Unknown bproc: {target}")
 
 
 def load_state(folder: Path) -> dict:
@@ -184,9 +249,146 @@ def load_state(folder: Path) -> dict:
 
 def save_state(folder: Path, state: dict) -> None:
     """
-    Save a bproc state file.
+    Save a compatibility state file and the split persistence files.
     """
+    settings = settings_from_compat_state(state)
+    runtime = runtime_from_compat_state(state)
+    save_settings(folder, settings)
+    save_runtime(folder, runtime)
     util.atomic_write_json(folder / "state.json", state)
+
+
+def load_settings(folder: Path) -> dict:
+    """
+    Load durable user-controlled settings, falling back to old state.json.
+    """
+    path = get_settings_path(folder)
+    if path.exists():
+        settings = util.read_json(path, _default_settings("missing"))
+    else:
+        settings = settings_from_compat_state(load_state(folder))
+
+    normalize_settings(settings)
+    return settings
+
+
+def save_settings(folder: Path, settings: dict) -> None:
+    """
+    Save durable user-controlled settings.
+    """
+    normalize_settings(settings)
+    util.atomic_write_json(get_settings_path(folder), settings)
+
+
+def load_data(folder: Path) -> dict:
+    """
+    Load durable bproc-controlled data.
+    """
+    data = util.read_json(get_data_path(folder), {})
+    if not isinstance(data, dict):
+        raise ValueError(f"data.json must contain a JSON object: {get_data_path(folder)}")
+    return data
+
+
+def save_data(folder: Path, data: dict) -> None:
+    """
+    Save durable bproc-controlled data.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("Bproc data must be a JSON object")
+    util.atomic_write_json(get_data_path(folder), data)
+
+
+def load_runtime(folder: Path) -> dict:
+    """
+    Load durable runner-controlled runtime, falling back to old state.json.
+    """
+    path = get_runtime_path(folder)
+    if path.exists():
+        runtime = util.read_json(path, _default_runtime())
+    else:
+        runtime = runtime_from_compat_state(load_state(folder))
+
+    normalize_runtime(runtime)
+    return runtime
+
+
+def save_runtime(folder: Path, runtime: dict) -> None:
+    """
+    Save durable runner-controlled runtime.
+    """
+    normalize_runtime(runtime)
+    util.atomic_write_json(get_runtime_path(folder), runtime)
+
+
+def compose_compat_state(settings: dict, runtime: dict) -> dict:
+    """
+    Build the old state.json shape for transitional callers.
+    """
+    return {
+        "uuid": settings["uuid"],
+        "enabled": settings["enabled"],
+        "schedule": dict(settings["schedule"]),
+        "lock_on_error": not settings["disable_on_error"],
+        "disable_on_error": settings["disable_on_error"],
+        "runtime": runtime,
+        "config": settings["config"],
+    }
+
+
+def settings_from_compat_state(state: dict) -> dict:
+    """
+    Build settings.json content from an old state-like object.
+    """
+    settings = _default_settings(state.get("uuid", "missing"))
+    settings["enabled"] = bool(state.get("enabled", settings["enabled"]))
+    settings["schedule"] = util.merge_defaults(settings["schedule"], state.get("schedule", {}))
+    if "disable_on_error" in state:
+        settings["disable_on_error"] = bool(state["disable_on_error"])
+    else:
+        settings["disable_on_error"] = not bool(state.get("lock_on_error", True))
+    settings["config"] = state.get("config", {}) if isinstance(state.get("config", {}), dict) else {}
+    normalize_settings(settings)
+    return settings
+
+
+def runtime_from_compat_state(state: dict) -> dict:
+    """
+    Build runtime.json content from an old state-like object.
+    """
+    runtime = util.merge_defaults(_default_runtime(), state.get("runtime", {}))
+    normalize_runtime(runtime)
+    return runtime
+
+
+def normalize_settings(settings: dict) -> None:
+    """
+    Normalize a settings dictionary in place.
+    """
+    defaults = _default_settings(settings.get("uuid", "missing"))
+    merged = util.merge_defaults(defaults, settings)
+    settings.clear()
+    settings.update(merged)
+    settings["enabled"] = bool(settings["enabled"])
+    settings["disable_on_error"] = bool(settings.get("disable_on_error", False))
+    if not isinstance(settings["config"], dict):
+        settings["config"] = {}
+    seconds = int(settings["schedule"].get("seconds", 3600))
+    settings["schedule"]["mode"] = settings["schedule"].get("mode") or "interval"
+    settings["schedule"]["seconds"] = seconds
+    settings["schedule"]["label"] = settings["schedule"].get("label") or util.get_schedule_label(seconds)
+
+
+def normalize_runtime(runtime: dict) -> None:
+    """
+    Normalize a runtime dictionary in place.
+    """
+    merged = util.merge_defaults(_default_runtime(), runtime)
+    runtime.clear()
+    runtime.update(merged)
+    runtime["running"] = bool(runtime["running"])
+    runtime["error_count"] = int(runtime.get("error_count", 0))
+    _normalize_runtime_timestamps({"runtime": runtime})
 
 
 def load_config(folder: Path) -> dict:
@@ -278,14 +480,21 @@ def _create_bproc_with_id(
     code_path.write_text(_starter_code(proc_id, display_name, seconds), encoding="utf-8", newline="\n")
 
     config = _build_bproc_config(proc_id, short_id, display_name, folder_name, folder)
-    state = _default_state(proc_id)
-    state["schedule"]["seconds"] = seconds
-    state["schedule"]["label"] = util.get_schedule_label(seconds)
-    state["lock_on_error"] = lock_on_error
-    state["runtime"]["next_run"] = util.compute_next_run(seconds)
+    settings = _default_settings(proc_id)
+    settings["name"] = display_name
+    settings["schedule"]["seconds"] = seconds
+    settings["schedule"]["label"] = util.get_schedule_label(seconds)
+    settings["disable_on_error"] = not lock_on_error
+    runtime = _default_runtime()
+    runtime["next_run"] = util.compute_next_run(seconds)
+    data = {}
+    state = compose_compat_state(settings, runtime)
 
     save_config(folder, config)
-    save_state(folder, state)
+    save_settings(folder, settings)
+    save_data(folder, data)
+    save_runtime(folder, runtime)
+    util.atomic_write_json(folder / "state.json", state)
 
     inventory["brprocs"][short_id] = {
         "uuid": proc_id,
@@ -304,6 +513,9 @@ def _create_bproc_with_id(
         "name": config["name"],
         "folder": folder_name,
         "folder_path": folder,
+        "settings": settings,
+        "data": data,
+        "runtime": runtime,
         "state": state,
     }
 
@@ -330,10 +542,10 @@ def set_enabled(short_id: str, enabled: bool) -> dict:
     Update enabled status and persist.
     """
     record = load_bproc_record(short_id)
-    state = record["state"]
-    state["enabled"] = enabled
-    save_state(record["folder_path"], state)
-    record["state"] = state
+    record["settings"]["enabled"] = enabled
+    save_settings(record["folder_path"], record["settings"])
+    record["state"] = compose_compat_state(record["settings"], record["runtime"])
+    util.atomic_write_json(record["folder_path"] / "state.json", record["state"])
     return record
 
 
@@ -342,10 +554,10 @@ def set_lock_on_error(short_id: str, lock_on_error: bool) -> dict:
     Update error-lock behavior and persist.
     """
     record = load_bproc_record(short_id)
-    state = record["state"]
-    state["lock_on_error"] = lock_on_error
-    save_state(record["folder_path"], state)
-    record["state"] = state
+    record["settings"]["disable_on_error"] = not lock_on_error
+    save_settings(record["folder_path"], record["settings"])
+    record["state"] = compose_compat_state(record["settings"], record["runtime"])
+    util.atomic_write_json(record["folder_path"] / "state.json", record["state"])
     return record
 
 
@@ -354,12 +566,15 @@ def set_schedule_seconds(short_id: str, seconds: int) -> dict:
     Update a bproc's interval schedule.
     """
     record = load_bproc_record(short_id)
-    state = record["state"]
-    state["schedule"]["seconds"] = seconds
-    state["schedule"]["label"] = util.get_schedule_label(seconds)
-    state["runtime"]["next_run"] = util.compute_next_run(seconds, state["runtime"]["last_run"])
-    save_state(record["folder_path"], state)
-    record["state"] = state
+    settings = record["settings"]
+    runtime = record["runtime"]
+    settings["schedule"]["seconds"] = seconds
+    settings["schedule"]["label"] = util.get_schedule_label(seconds)
+    runtime["next_run"] = util.compute_next_run(seconds, runtime["last_run"])
+    save_settings(record["folder_path"], settings)
+    save_runtime(record["folder_path"], runtime)
+    record["state"] = compose_compat_state(settings, runtime)
+    util.atomic_write_json(record["folder_path"] / "state.json", record["state"])
     return record
 
 
@@ -368,10 +583,10 @@ def save_bproc_config_object(short_id: str, data: dict) -> dict:
     Replace the user config object inside state.json.
     """
     record = load_bproc_record(short_id)
-    state = record["state"]
-    state["config"] = data
-    save_state(record["folder_path"], state)
-    record["state"] = state
+    record["settings"]["config"] = data
+    save_settings(record["folder_path"], record["settings"])
+    record["state"] = compose_compat_state(record["settings"], record["runtime"])
+    util.atomic_write_json(record["folder_path"] / "state.json", record["state"])
     return record
 
 
@@ -445,13 +660,22 @@ def _install_drop_item(
         _copy_drop_file(item, folder)
 
     _ensure_code_file(folder, base_name)
+    _validate_code_file(folder / "code.py")
     discovered = _read_bproc_module_metadata(folder / "code.py")
     display_name = discovered.get("name") or base_name
     config = _build_bproc_config(proc_id, short_id, display_name, folder_name, folder)
-    state = _build_state_from_folder(proc_id, folder, discovered)
+    settings = _build_settings_from_folder(proc_id, display_name, folder, discovered)
+    runtime = _build_runtime_from_folder(folder, settings)
+    data = util.read_json(folder / "data.json", {})
+    if not isinstance(data, dict):
+        data = {}
+    state = compose_compat_state(settings, runtime)
 
     save_config(folder, config)
-    save_state(folder, state)
+    save_settings(folder, settings)
+    save_data(folder, data)
+    save_runtime(folder, runtime)
+    util.atomic_write_json(folder / "state.json", state)
 
     inventory["brprocs"][short_id] = {
         "uuid": proc_id,
@@ -472,6 +696,9 @@ def _install_drop_item(
         "name": config["name"],
         "folder": folder_name,
         "folder_path": folder,
+        "settings": settings,
+        "data": data,
+        "runtime": runtime,
         "state": state,
     }
 
@@ -546,29 +773,59 @@ def _build_bproc_config(
     return payload
 
 
-def _build_state_from_folder(proc_id: str, folder: Path, discovered: dict) -> dict:
+def _build_settings_from_folder(proc_id: str, display_name: str, folder: Path, discovered: dict) -> dict:
     """
-    Create default state and pick up obvious module metadata.
+    Create settings from installation-time defaults.
     """
-    state = _default_state(proc_id)
+    settings = _default_settings(proc_id)
+    settings["name"] = display_name
     state_path = folder / "state.json"
+    settings_path = get_settings_path(folder)
+    if settings_path.exists():
+        settings = util.merge_defaults(settings, util.read_json(settings_path, {}))
+
     existing = util.read_json(state_path, {})
-    if isinstance(existing, dict):
-        state = util.merge_defaults(state, existing)
+    if state_path.exists() and isinstance(existing, dict) and not settings_path.exists():
+        settings = settings_from_compat_state(existing)
 
     interval_seconds = discovered.get("interval_seconds")
-    if interval_seconds is not None and not state_path.exists():
-        state["schedule"]["seconds"] = interval_seconds
-        state["schedule"]["label"] = util.get_schedule_label(interval_seconds)
-    elif not state["schedule"].get("label"):
-        state["schedule"]["label"] = util.get_schedule_label(state["schedule"]["seconds"])
+    if interval_seconds is not None and not state_path.exists() and not settings_path.exists():
+        settings["schedule"]["seconds"] = interval_seconds
+        settings["schedule"]["label"] = util.get_schedule_label(interval_seconds)
 
-    return state
+    if "enabled" in discovered and not state_path.exists() and not settings_path.exists():
+        settings["enabled"] = discovered["enabled"]
+    if "disable_on_error" in discovered and not state_path.exists() and not settings_path.exists():
+        settings["disable_on_error"] = discovered["disable_on_error"]
+    if "config" in discovered and not state_path.exists() and not settings_path.exists():
+        settings["config"] = discovered["config"]
+
+    normalize_settings(settings)
+    return settings
+
+
+def _build_runtime_from_folder(folder: Path, settings: dict) -> dict:
+    """
+    Create runtime from existing files or defaults.
+    """
+    runtime_path = get_runtime_path(folder)
+    state_path = folder / "state.json"
+
+    if runtime_path.exists():
+        runtime = util.read_json(runtime_path, _default_runtime())
+    elif state_path.exists():
+        runtime = runtime_from_compat_state(load_state(folder))
+    else:
+        runtime = _default_runtime()
+        runtime["next_run"] = util.compute_next_run(settings["schedule"]["seconds"])
+
+    normalize_runtime(runtime)
+    return runtime
 
 
 def _read_bproc_module_metadata(code_path: Path) -> dict:
     """
-    Read a couple of optional top-level metadata assignments from code.py.
+    Read install-time defaults from code.py without executing it.
     """
     try:
         source = code_path.read_text(encoding="utf-8")
@@ -583,8 +840,8 @@ def _read_bproc_module_metadata(code_path: Path) -> dict:
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
             continue
 
-        name = node.targets[0].id
-        if name not in {"name", "interval_seconds", "uuid", "id"}:
+        target_name = node.targets[0].id
+        if target_name not in {"bproc_defaults", "name", "interval_seconds", "uuid", "id"}:
             continue
 
         try:
@@ -592,42 +849,102 @@ def _read_bproc_module_metadata(code_path: Path) -> dict:
         except Exception:
             continue
 
-        if name == "name" and isinstance(value, str):
-            found[name] = value
-        if name == "interval_seconds" and isinstance(value, int):
-            found[name] = value
-        if name in {"uuid", "id"} and isinstance(value, str):
+        if target_name == "bproc_defaults" and isinstance(value, dict):
+            _merge_bproc_defaults(found, value)
+        if target_name == "name" and isinstance(value, str) and "name" not in found:
+            found["name"] = value
+        if target_name == "interval_seconds" and isinstance(value, int) and "interval_seconds" not in found:
+            found["interval_seconds"] = value
+        if target_name in {"uuid", "id"} and isinstance(value, str):
             found["uuid"] = value
 
     return found
+
+
+def _merge_bproc_defaults(found: dict, defaults: dict) -> None:
+    """
+    Merge supported bproc_defaults keys into a discovered defaults bundle.
+    """
+    if isinstance(defaults.get("name"), str):
+        found["name"] = defaults["name"]
+
+    if isinstance(defaults.get("uuid"), str):
+        found["uuid"] = defaults["uuid"]
+
+    if isinstance(defaults.get("interval_seconds"), int):
+        found["interval_seconds"] = defaults["interval_seconds"]
+
+    schedule = defaults.get("schedule")
+    if isinstance(schedule, dict) and isinstance(schedule.get("seconds"), int):
+        found["interval_seconds"] = schedule["seconds"]
+
+    if isinstance(defaults.get("enabled"), bool):
+        found["enabled"] = defaults["enabled"]
+
+    if isinstance(defaults.get("disable_on_error"), bool):
+        found["disable_on_error"] = defaults["disable_on_error"]
+    elif isinstance(defaults.get("lock_on_error"), bool):
+        found["disable_on_error"] = not defaults["lock_on_error"]
+
+    if isinstance(defaults.get("config"), dict):
+        found["config"] = defaults["config"]
+
+
+def _validate_code_file(code_path: Path) -> None:
+    """
+    Ensure dropped Python code has a nullary tick() function.
+    """
+    source = code_path.read_text(encoding="utf-8")
+    module = ast.parse(source, filename=str(code_path))
+    for node in module.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "tick":
+            if node.args.args or node.args.kwonlyargs or node.args.vararg or node.args.kwarg:
+                raise ValueError("code.py tick() must not accept arguments")
+            return
+
+    raise ValueError("code.py must define tick()")
 
 
 def _default_state(proc_id: str) -> dict:
     """
     Return a default runtime state object.
     """
+    return compose_compat_state(_default_settings(proc_id), _default_runtime())
+
+
+def _default_settings(proc_id: str) -> dict:
+    """
+    Return default user-controlled settings.
+    """
     return {
         "uuid": proc_id,
+        "name": "",
         "enabled": True,
+        "disable_on_error": False,
         "schedule": {
             "mode": "interval",
             "seconds": 3600,
             "label": "1 hour",
         },
-        "lock_on_error": True,
-        "runtime": {
-            "running": False,
-            "last_run": None,
-            "next_run": util.now_epoch(),
-            "last_success": None,
-            "last_error": {
-                "timestamp": None,
-                "message": None,
-                "traceback": None,
-            },
-            "error_count": 0,
-        },
         "config": {},
+    }
+
+
+def _default_runtime() -> dict:
+    """
+    Return default runner-controlled runtime.
+    """
+    return {
+        "running": False,
+        "last_run": None,
+        "next_run": util.now_epoch(),
+        "last_success": None,
+        "last_error": {
+            "timestamp": None,
+            "message": None,
+            "traceback": None,
+        },
+        "error_count": 0,
     }
 
 
@@ -674,8 +991,10 @@ Battery Runner bproc: {display_name}
 from batteryrunner import bproc_context as ctx
 
 uuid = {proc_id!r}
-name = {display_name!r}
-interval_seconds = {seconds}
+bproc_defaults = {{
+    "name": {display_name!r},
+    "interval_seconds": {seconds},
+}}
 
 
 def tick():
@@ -693,11 +1012,15 @@ def _refresh_bproc_metadata(short_id: str) -> None:
         raise KeyError(f"Unknown bproc short id: {short_id}")
 
     folder = get_brprocs_root() / item["folder"]
+    settings = load_settings(folder)
+    runtime = load_runtime(folder)
     record = {
         "short_id": short_id,
         **item,
         "folder_path": folder,
-        "state": load_state(folder),
+        "settings": settings,
+        "runtime": runtime,
+        "state": compose_compat_state(settings, runtime),
     }
     config = load_config(folder)
     state = record["state"]
@@ -799,7 +1122,10 @@ def _derive_short_id(inventory: dict, proc_id: str) -> str:
 
 def _sync_bproc_metadata(record: dict, config: dict, state: dict, inventory: dict) -> bool:
     """
-    Refresh name and interval metadata when code.py changed.
+    Refresh source bookkeeping when code.py changed.
+
+    Source defaults are installation defaults only. Editing code.py after install
+    must not silently rewrite installed settings.
     """
     folder = record["folder_path"]
     code_path = folder / "code.py"
@@ -811,21 +1137,10 @@ def _sync_bproc_metadata(record: dict, config: dict, state: dict, inventory: dic
     if stored_hash == current_hash:
         return False
 
-    discovered = _read_bproc_module_metadata(code_path)
-    display_name = discovered.get("name") or record["name"]
-    seconds = discovered.get("interval_seconds")
-
-    config["name"] = display_name
     config["code_hash"] = current_hash
     save_config(folder, config)
 
-    inventory["brprocs"][record["short_id"]]["name"] = display_name
-
-    if seconds is not None:
-        state["schedule"]["seconds"] = seconds
-        state["schedule"]["label"] = util.get_schedule_label(seconds)
-        state["runtime"]["next_run"] = util.compute_next_run(seconds, state["runtime"]["last_run"])
-        save_state(folder, state)
+    inventory["brprocs"][record["short_id"]]["name"] = record["settings"].get("name") or record["name"]
 
     return True
 
